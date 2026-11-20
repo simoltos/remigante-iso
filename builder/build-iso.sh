@@ -379,8 +379,6 @@ printf '%s\n' "${arch_packages[@]}" >> "$live_packages_file"
 sed -i -E '/^(linux|broadcom-wl)$/d' "$live_packages_file"
 
 if [[ -d /omarchy-source ]]; then
-  cat /builder/live-desktop.packages >> "$live_packages_file"
-  printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" >> "$live_packages_file"
   mkdir -p "$build_cache_dir/airootfs/etc/remigante"
   touch "$build_cache_dir/airootfs/etc/remigante/live-desktop"
   # Switch the root layers before Plymouth attaches to /new_root.
@@ -390,8 +388,7 @@ if [[ -d /omarchy-source ]]; then
     echo "ERROR: cannot place the shared-image hook after archiso in $live_init_config" >&2
     exit 1
   }
-  # This image ships presets for the kernels it boots. A plain linux preset
-  # makes mkinitcpio -P also request a stock Arch kernel that is absent.
+  # Only build presets for the kernels shipped on the ISO.
   rm -f "$build_cache_dir/airootfs/etc/mkinitcpio.d/linux.preset"
 fi
 
@@ -1126,12 +1123,8 @@ done
 # Live ISO uses the same offline pacman.conf.
 cp "$build_cache_dir/pacman-offline.conf" "$build_cache_dir/airootfs/etc/pacman.conf"
 
-# The desktop runtime pulls Limine into the preview. Its pacman hooks target
-# an installed ESP and replace Arch's mkinitcpio hook. Let the ISO's own
-# kernel presets generate the live initramfs during mkarchiso's pacstrap.
+# The installer layer shares unchanged files with the full desktop image.
 if [[ -f "$build_cache_dir/airootfs/etc/remigante/live-desktop" ]]; then
-  sed -i '/^\[options\]$/a NoExtract = usr/local/bin/mkinitcpio etc/pacman.d/hooks/90-mkinitcpio-install.hook usr/share/libalpm/hooks/*-limine-*.hook' \
-    "$build_cache_dir/pacman-offline.conf"
   export REMIGANTE_ROOT_SFS="$root_image"
   export PATH="/builder/live-layer:$PATH"
 fi

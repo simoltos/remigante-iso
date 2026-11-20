@@ -4,10 +4,12 @@ On the Remigante ISO, press **Enter** on the opening screen to start the
 installer. Choose **Try live** to explore the desktop from the USB drive.
 Logging out returns to the same screen.
 
-The installer and the live desktop read the same Btrfs system from
-`omarchy-root.sfs`. The live filesystem contains its own configuration and
-files that differ from the installed system. Changes during a preview go to
-RAM. The installer writes the original system image to disk.
+Try live starts the full Btrfs system from `omarchy-root.sfs`, the image
+that the installer writes to disk. The temporary account uses the normal
+system and user setup, Hyprland configuration and first-login services.
+Both the installer's files and the writable desktop layer stay available
+across logout. Desktop changes last until the machine reboots. A fresh
+installation always starts from the read-only image.
 This uses the shared-image format from [Omarchy ISO #332](https://github.com/omacom/omarchy-iso/pull/332).
 
 The Remigante 4.5.0 preview uses the stable mirror and the `omarchy-pkgs`

@@ -1,24 +1,43 @@
 #!/bin/bash
-set -e
-export OMARCHY_PATH=/usr/share/omarchy
-export PATH="$OMARCHY_PATH/bin:$PATH"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR:?Missing desktop login session}/bus"
-
-if [[ ! -s $HOME/.local/state/omarchy/current/theme.name ]]; then
-  OMARCHY_THEME_HEADLESS=1 omarchy-theme-set "Tokyo Night"
+set -euo pipefail
+user=remigante-live
+if [[ ${1:-} != --prepare ]]; then
+  openvt --console=8 --switch --wait -- /usr/bin/login -f "$user" || true
+  exec /usr/local/bin/remigante-live --return
 fi
 
-# Use the packaged Remigante desktop config without its setup and disk
-# automount hooks in this temporary login.
-cat >"$HOME/.config/hypr/hyprland.lua" <<'EOF'
-package.preload["default.hypr.autostart"] = function()
-  hl.on("hyprland.start", function()
-    hl.exec_cmd("dbus-update-activation-environment --systemd --all")
-    hl.exec_cmd("omarchy-launch-shell")
-  end)
-end
-dofile(os.getenv("OMARCHY_PATH") .. "/config/hypr/hyprland.lua")
+export SYSTEMD_OFFLINE=1 SYSTEMD_IN_CHROOT=1 OMARCHY_MIRROR=${2:?}
+export OMARCHY_PATH=/usr/share/omarchy
+export PATH="$OMARCHY_PATH/bin:$PATH"
+id "$user" >/dev/null 2>&1 || useradd --create-home --user-group --shell /bin/bash "$user"
+
+# The writable preview is an overlay on RAM. Snapper cannot create a Btrfs
+# snapshot config for it. Give the finalizer its normal config template.
+install -Dm640 "$OMARCHY_PATH/default/snapper/root" /etc/snapper/configs/root
+omarchy-apply-system --install-user "$user" --first-install
+(cd "/home/$user" && runuser -u "$user" -- env HOME="/home/$user" omarchy-provision-user --first-install)
+
+# The installed system uses SDDM. The live button opens its UWSM session
+# directly and returns to the installer on logout.
+systemctl disable sddm.service
+systemctl mask snapper-cleanup.timer limine-snapper-sync.service
+# A live boot must not discover swap or mount partitions on other disks.
+mkdir -p /etc/systemd/system-generators
+ln -sf /dev/null /etc/systemd/system-generators/systemd-gpt-auto-generator
+cat >/etc/profile.d/remigante-live-session.sh <<'EOF'
+if [ "$(id -un)" = remigante-live ] && [ "$(tty 2>/dev/null)" = /dev/tty8 ]; then
+  exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
+fi
 EOF
-# The installer can keep graphical.target queued until the clock syncs.
-# The preview already has an active seat and can start offline.
-exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
+cat >/etc/systemd/system/remigante-live-session.service <<'EOF'
+[Unit]
+Description=Remigante live desktop
+After=systemd-user-sessions.service getty.target
+[Service]
+ExecStart=/usr/local/bin/remigante-live-session
+[Install]
+WantedBy=graphical.target
+EOF
+systemctl enable remigante-live-session.service
+mkdir -p /etc/remigante
+touch /etc/remigante/preview-ready
