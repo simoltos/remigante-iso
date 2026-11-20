@@ -10,6 +10,8 @@ system and user setup, Hyprland configuration and first-login services.
 Both the installer's files and the writable desktop layer stay available
 across logout. Desktop changes last until the machine reboots. A fresh
 installation always starts from the read-only image.
+The temporary `remigante-live` account has an empty password and can use
+`sudo` to install packages during the preview.
 This uses the shared-image format from [Omarchy ISO #332](https://github.com/omacom/omarchy-iso/pull/332).
 
 The Remigante 4.5.0 preview uses the stable mirror and the `omarchy-pkgs`

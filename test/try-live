@@ -26,4 +26,5 @@ cmp "$base/etc/skel/.config/hypr/hyprland.lua" "$home/.config/hypr/hyprland.lua"
 [[ -e $home/.local/state/omarchy/done/finalize-user ]] || fail "User provisioning did not finish."
 systemctl is-active --quiet remigante-live-session.service
 pgrep -xu "$user" Hyprland >/dev/null || fail "Hyprland is not running."
+[[ $(runuser -u "$user" -- sudo -n id -u) == 0 ]] || fail "Passwordless sudo failed."
 echo "Live desktop verified against all $(wc -l <"$tmp/image") image packages."

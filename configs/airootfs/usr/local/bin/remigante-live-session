@@ -10,6 +10,15 @@ export SYSTEMD_OFFLINE=1 SYSTEMD_IN_CHROOT=1 OMARCHY_MIRROR=${2:?}
 export OMARCHY_PATH=/usr/share/omarchy
 export PATH="$OMARCHY_PATH/bin:$PATH"
 id "$user" >/dev/null 2>&1 || useradd --create-home --user-group --shell /bin/bash "$user"
+usermod -aG wheel "$user"
+passwd -d "$user"
+install -Dm440 /dev/stdin /etc/sudoers.d/90-remigante-live <<<"$user ALL=(ALL:ALL) NOPASSWD: ALL"
+visudo -cf /etc/sudoers
+
+# The system image ships no private pacman key. Generate one in RAM and
+# trust the packaged distribution keys, as on a fresh installation.
+pacman-key --init
+pacman-key --populate
 
 # The writable preview is an overlay on RAM. Snapper cannot create a Btrfs
 # snapshot config for it. Give the finalizer its normal config template.
