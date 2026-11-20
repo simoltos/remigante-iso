@@ -378,6 +378,23 @@ printf '%s\n' "${arch_packages[@]}" >> "$live_packages_file"
 # Anchored so linux-omarchy, linux-t2 and linux-firmware are untouched.
 sed -i -E '/^(linux|broadcom-wl)$/d' "$live_packages_file"
 
+if [[ -d /omarchy-source ]]; then
+  cat /builder/live-desktop.packages >> "$live_packages_file"
+  printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" >> "$live_packages_file"
+  mkdir -p "$build_cache_dir/airootfs/etc/remigante"
+  touch "$build_cache_dir/airootfs/etc/remigante/live-desktop"
+  # Switch the root layers before Plymouth attaches to /new_root.
+  live_init_config="$build_cache_dir/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+  sed -i '/^HOOKS=(/s/ archiso_pxe_nfs / archiso_pxe_nfs remigante_base /' "$live_init_config"
+  grep -q '^HOOKS=(.* archiso_pxe_nfs remigante_base ' "$live_init_config" || {
+    echo "ERROR: cannot place the shared-image hook after archiso in $live_init_config" >&2
+    exit 1
+  }
+  # This image ships presets for the kernels it boots. A plain linux preset
+  # makes mkinitcpio -P also request a stock Arch kernel that is absent.
+  rm -f "$build_cache_dir/airootfs/etc/mkinitcpio.d/linux.preset"
+fi
+
 # Build the offline mirror: everything pacstrap might want during the target
 # install. With --local-source, the omarchy* packages we just built are
 # already in the mirror and we filter them out below. Without it, pacman -Syw
@@ -910,6 +927,12 @@ iso_subdir="$(sed -n 's/^install_dir="\(.*\)"$/\1/p' "$build_cache_dir/profilede
 root_image_dir="$build_cache_dir/work/iso/$iso_subdir"
 root_image="$root_image_dir/omarchy-root.img.zst"
 mkdir -p "$root_image_dir"
+if [[ -f $build_cache_dir/airootfs/etc/remigante/live-desktop ]]; then
+  rm -f "$root_image" "$root_image.sha256"
+  root_image="$root_image_dir/omarchy-root.sfs"
+else
+  rm -f "$root_image_dir/omarchy-root.sfs"{,.sha256}
+fi
 # Builds from before the raw image left a send stream (and, briefly, its
 # checksum) in the persistent build cache, where they would ship inside the
 # squashfs.
@@ -1102,6 +1125,16 @@ done
 
 # Live ISO uses the same offline pacman.conf.
 cp "$build_cache_dir/pacman-offline.conf" "$build_cache_dir/airootfs/etc/pacman.conf"
+
+# The desktop runtime pulls Limine into the preview. Its pacman hooks target
+# an installed ESP and replace Arch's mkinitcpio hook. Let the ISO's own
+# kernel presets generate the live initramfs during mkarchiso's pacstrap.
+if [[ -f "$build_cache_dir/airootfs/etc/remigante/live-desktop" ]]; then
+  sed -i '/^\[options\]$/a NoExtract = usr/local/bin/mkinitcpio etc/pacman.d/hooks/90-mkinitcpio-install.hook usr/share/libalpm/hooks/*-limine-*.hook' \
+    "$build_cache_dir/pacman-offline.conf"
+  export REMIGANTE_ROOT_SFS="$root_image"
+  export PATH="/builder/live-layer:$PATH"
+fi
 
 # Build the ISO. profiledef.sh reads OMARCHY_ARCH for the archiso arch/bootmodes.
 echo "[timing] mkarchiso start $(date +%s)"

@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+export OMARCHY_PATH=/usr/share/omarchy
+export PATH="$OMARCHY_PATH/bin:$PATH"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR:?Missing desktop login session}/bus"
+
+if [[ ! -s $HOME/.local/state/omarchy/current/theme.name ]]; then
+  OMARCHY_THEME_HEADLESS=1 omarchy-theme-set "Tokyo Night"
+fi
+
+# Use the packaged Remigante desktop config without its setup and disk
+# automount hooks in this temporary login.
+cat >"$HOME/.config/hypr/hyprland.lua" <<'EOF'
+package.preload["default.hypr.autostart"] = function()
+  hl.on("hyprland.start", function()
+    hl.exec_cmd("dbus-update-activation-environment --systemd --all")
+    hl.exec_cmd("omarchy-launch-shell")
+  end)
+end
+dofile(os.getenv("OMARCHY_PATH") .. "/config/hypr/hyprland.lua")
+EOF
+# The installer can keep graphical.target queued until the clock syncs.
+# The preview already has an active seat and can start offline.
+exec uwsm start -g -1 -e -D Hyprland hyprland.desktop

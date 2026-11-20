@@ -1,8 +1,32 @@
 # Omarchy ISO
 
+On the Remigante ISO, press **Enter** on the opening screen to start the
+installer. Choose **Try live** to explore the desktop from the USB drive.
+Logging out returns to the same screen.
+
+The installer and the live desktop read the same Btrfs system from
+`omarchy-root.sfs`. The live filesystem contains its own configuration and
+files that differ from the installed system. Changes during a preview go to
+RAM. The installer writes the original system image to disk.
+This uses the shared-image format from [Omarchy ISO #332](https://github.com/omacom/omarchy-iso/pull/332).
+
+The Remigante 4.5.0 preview uses the stable mirror and the `omarchy-pkgs`
+recipes at `c7a1ef7f86cccab072fb11f22564862c03f50199`. To build with the
+upstream Docker launcher, check out those recipes in `../omarchy-pkgs` and run
+the following command.
+
+```bash
+OMARCHY_MIRROR=stable OMARCHY_RUNTIME_PACKAGE=omarchy OMARCHY_SETTINGS_PACKAGE=omarchy-settings \
+  ./bin/omarchy-iso-make --keep-pkg-cache --local-source ../remigante ../omarchy-pkgs
+```
+
+The same `builder/build-iso.sh` can run as root inside a disposable Arch VM.
+It expects `/builder`, `/configs`, `/archiso`, `/omarchy-source`, `/omarchy-pkgs`
+and a writable `/out`. The VM supplies the loop device for the Btrfs image.
+
 [![Nightly ISO Build](https://github.com/omacom/omarchy-iso/actions/workflows/nightly-build.yml/badge.svg?branch=quattro&event=schedule)](https://github.com/omacom/omarchy-iso/actions/workflows/nightly-build.yml?query=branch%3Aquattro+event%3Aschedule)
 
-The Omarchy ISO is the only supported way to install Omarchy. It ships the Omarchy Configurator, writes a pre-built Arch Linux + Omarchy root image (a zstd-compressed btrfs partition image) onto the target with `zstdcat | dd`, gives it a fresh filesystem id and grows it to the partition, installs the per-machine packages (audio firmware, and a kernel the image lacks) from the bundled mirror, runs target system setup in the chroot, creates the user, and runs `omarchy-provision-user` for that user.
+The Omarchy ISO is the only supported way to install Omarchy. It ships the Omarchy Configurator, writes a pre-built Arch Linux + Omarchy Btrfs image onto the target, gives it a fresh filesystem id and grows it to the partition, installs the per-machine packages (audio firmware, and a kernel the image lacks) from the bundled mirror, runs target system setup in the chroot, creates the user, and runs `omarchy-provision-user` for that user.
 
 ## Get Omarchy
 
@@ -293,7 +317,7 @@ Scenarios under `test/integration.d/` boot a real ISO install in QEMU and assert
 
 The first scenario is `factory-reset`: it proves `omarchy-system-factory-reset` hands a machine on without destroying a shared ESP. The installed ESP gets a Windows entry with payload plus a second Linux cloned under a foreign machine-id with its own boot directory and UKIs; a real factory reset is then driven through a guest pty, and the harness asserts the foreign entries survive both the staged reset and first-boot provisioning, that the old Omarchy identity is fully retired, and that the machine reaches first-boot setup unattended.
 
-`corrupt-image` proves a bad install medium is refused before the disk is touched. It copies the ISO and flips one byte a megabyte into the root image stream itself — addressed from the extent xorriso reports out of the ISO9660 directory records, so the damage lands in the shipped bytes and nowhere else — then autoinstalls from that copy: `omarchy-root-image-verify.service` (which hashes the image at boot, while a user would be in the configurator) must fail, the install must halt in its pre-flight phase with the "re-flash" advice on screen, and the target disk must still match its original contents byte for byte. It boots the ISO itself rather than the base image, so it also works standalone with `OMARCHY_INTEGRATION_ISO` set.
+`corrupt-image` proves a bad install medium is refused before the disk is touched. It copies the ISO and flips one byte in the root image itself — addressed from the extent xorriso reports out of the ISO9660 directory records, so the damage lands in the shipped bytes and nowhere else — then autoinstalls from that copy: `omarchy-root-image-verify.service` (which hashes the image at boot, while a user would be in the configurator) must fail, the install must halt in its pre-flight phase with the "re-flash" advice on screen, and the target disk must still match its original contents byte for byte. It boots the ISO itself rather than the base image, so it also works standalone with `OMARCHY_INTEGRATION_ISO` set.
 
 Artifacts — screenshots, the fixtured/staged/final `limine.conf`, the reset typescript, and the factory-reset log — land under `test-runs/<iso>-integration/runs/<timestamp>-<scenario>/`, and `--no-preview` skips the `imv` review just like the acceptance harness.
 

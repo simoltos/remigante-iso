@@ -1,0 +1,19 @@
+#!/bin/bash
+set -eu
+
+[[ -f /etc/remigante/live-desktop ]]
+if ! id remigante-live >/dev/null 2>&1; then
+  useradd --create-home --user-group --shell /bin/bash remigante-live
+  cat >/home/remigante-live/.bash_profile <<'EOF'
+if [[ $- == *i* && -z ${WAYLAND_DISPLAY:-} ]]; then
+  exec /usr/local/bin/remigante-live-session
+fi
+EOF
+  chown remigante-live:remigante-live /home/remigante-live/.bash_profile
+fi
+
+systemctl start --no-block NetworkManager.service bluetooth.service
+# tty8 is outside logind's automatic getty range. On tty2 a competing getty
+# can hang up the desktop login immediately after the switch.
+systemd-run --wait --collect --unit=remigante-live \
+  /usr/bin/openvt --console=8 --switch --wait -- /usr/bin/login -f remigante-live

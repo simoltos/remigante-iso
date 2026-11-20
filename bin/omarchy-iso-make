@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
       echo "Error: --local-source requires two args: <omarchy-checkout> <pkgs-checkout>" >&2
       exit 1
     fi
-    OMARCHY_MIRROR=edge
+    OMARCHY_MIRROR=${OMARCHY_MIRROR:-edge}
     OMARCHY_ISO_REF=local
     shift 3
     ;;
