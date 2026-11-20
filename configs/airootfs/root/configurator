@@ -106,11 +106,11 @@ clear_logo() {
   gum style --foreground 2 --padding "1 0 0 $PADDING_LEFT" "$(<"$LOGO_PATH")"
 }
 
-# Draw both choices at fixed positions below the animated logo.
+# Draw both choices and hide the cursor that ttfx restores on exit.
 draw_welcome_choices() {
   local row=$1 column=$2 hint=$3 install_mark='>' live_mark=' '
   if (( $4 == 2 )); then install_mark=' '; live_mark='>'; fi
-  printf '\033[%d;%dH\033[32m%s\033[0m %s\033[%d;%dH\033[32m%s\033[0m Try live' \
+  printf '\033[?25l\033[%d;%dH\033[32m%s\033[0m %s\033[%d;%dH\033[32m%s\033[0m Try live' \
     "$row" "$column" "$install_mark" "$hint" "$((row + 1))" "$column" "$live_mark"
 }
 
