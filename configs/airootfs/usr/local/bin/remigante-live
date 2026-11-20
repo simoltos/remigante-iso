@@ -71,11 +71,17 @@ esac
 mount --bind --make-private /run "$next/run"
 mount --rbind --make-rprivate /run/archiso "$next/run/archiso"
 mount --rbind --make-rprivate "$base" "$next$base"
+# Keep the original mounts as well as their copies until the root switch.
+# The read-only loop device still holds its SquashFS container open.
 while IFS= read -r path; do
+  case "$path/" in
+    /run/archiso/*|"$base/"*|"$next/"*) ;;
+    *) continue ;;
+  esac
   unit=$(systemd-escape --path --suffix=mount "$path")
   mkdir -p "/run/systemd/system/$unit.d"
   printf '[Unit]\nDefaultDependencies=no\n' >"/run/systemd/system/$unit.d/remigante.conf"
-done < <(findmnt -Rrn -o TARGET "$next")
+done < <(findmnt -rn -o TARGET)
 systemctl daemon-reload
 systemctl --no-block soft-reboot
 trap - EXIT

@@ -11,6 +11,11 @@ fail() { echo "$*" >&2; exit 1; }
   fail "The desktop must run directly from the installation image."
 [[ ,$(findmnt -n -o VFS-OPTIONS --mountpoint "$base"), == *,ro,* ]] ||
   fail "The installation image must be mounted read-only."
+for path in /run/archiso/bootmnt "${base%/*}/container" "$base"; do
+  unit=$(systemd-escape --path --suffix=mount "$path")
+  conflicts=$(systemctl show "$unit" --property=Conflicts --value)
+  [[ " $conflicts " != *" umount.target "* ]] || fail "Logout would try to unmount $path."
+done
 # Per-machine setup may add packages, but every package baked into the
 # image must be present at exactly the version an installation starts with.
 tmp=$(mktemp -d)
