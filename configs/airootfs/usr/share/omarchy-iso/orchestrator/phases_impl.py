@@ -3908,7 +3908,9 @@ def cleanup_protected_state(ctx: InstallContext) -> None:
     Idempotent and safe to call multiple times. Successful protected installs
     intentionally keep the target mounted until reboot.
     """
-    if not ctx.is_protected:
+    # Free-space installs hand us mounts opened by the configurator. A
+    # preserving reinstall owns only what Reinstall.prepare opened itself.
+    if ctx.mode != "protected":
         return
 
     # Swapoff, umount -R, and close of the mappers the mounts were backed by;

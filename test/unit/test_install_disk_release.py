@@ -111,6 +111,12 @@ class InstallDiskReleaseTest(unittest.TestCase):
 
         self.arch.load_arch_config.assert_called_once()
 
+    def test_failed_reinstall_preflight_leaves_existing_mounts_and_mappers_alone(self):
+        ctx = types.SimpleNamespace(mode="preserve_home", is_protected=True, target=Path("/mnt"))
+        with mock.patch.object(phases_impl.subprocess, "run") as run:
+            phases_impl.cleanup_protected_state(ctx)
+        run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
