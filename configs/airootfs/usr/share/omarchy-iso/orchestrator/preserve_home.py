@@ -46,8 +46,10 @@ def _available(part: dict) -> bool:
 
 
 def candidates(disk: str) -> list[dict]:
+    if not Path("/sys/firmware/efi").is_dir() or not BASE_SYSTEM.is_mount():
+        return []
     partitions = _partitions(disk)
-    if not Path("/sys/firmware/efi").is_dir() or not any(map(_is_esp, partitions)):
+    if not any(map(_is_esp, partitions)):
         return []
     return [part for part in partitions if part["fstype"] in {"btrfs", "crypto_LUKS"} and _available(part)]
 
@@ -93,7 +95,13 @@ def _matches(source: str, uuid: str, partuuid: str = "") -> bool:
     )
 
 
+class HomeOwnerMismatch(RuntimeError):
+    """The layout is recognizable, but the entered login has no matching home."""
+
+
 def _inspect(top: Path, fs_uuid: str, partitions: list[dict], username: str) -> dict:
+    if not username or "/" in username or username in {".", ".."}:
+        raise HomeOwnerMismatch("Enter the existing account name.")
     if not all(_subvolume(top / name) for name in SUBVOLUMES.values()):
         raise RuntimeError("This disk does not have the standard Remigante Btrfs layout.")
     etc = top / "@" / "etc"
@@ -136,7 +144,7 @@ def _inspect(top: Path, fs_uuid: str, partitions: list[dict], username: str) -> 
             if uid >= 1000 and gid >= 1000 and not home.is_symlink() and home.is_dir() and home.stat().st_uid == uid:
                 break
     else:
-        raise RuntimeError(f"Choose the username that already owns /home/{username} on this disk.")
+        raise HomeOwnerMismatch(f"Could not match /home/{username} to an existing account.")
 
     return {"esp_device": esp["path"], "esp_partuuid": esp["partuuid"],
             "esp_mount": esp_mount, "uid": uid, "gid": gid,
@@ -457,6 +465,9 @@ def main() -> int:
             print(json.dumps(probe(disk, device, username, sys.stdin.buffer.read())))
         else:
             raise ValueError("Expected candidates or probe.")
+    except HomeOwnerMismatch as exc:
+        print(exc, file=sys.stderr)
+        return 3
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(exc, file=sys.stderr)
         return 1

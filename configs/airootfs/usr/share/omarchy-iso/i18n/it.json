@@ -71,6 +71,8 @@
   "preserve.passphrase": "Passphrase LUKS attuale: ",
   "preserve.checking": "Verifica dell'installazione esistente su %1",
   "preserve.back": "Premi Invio per tornare indietro.",
+  "preserve.owner": "Home di %1 non trovata. Inserisci il nome utente esistente o premi Esc per tornare.",
+  "preserve.scanFailed": "Impossibile verificare se esiste un'installazione su %1",
   "preserve.interrupted": "Conferma per recuperare la reinstallazione interrotta e riprovare.",
   "preserve.detail": "Il sistema su %1 verrà sostituito. Le home esistenti, tra cui %2, verranno conservate.",
   "preserve.confirm": "Reinstallare Remigante su questa partizione?",

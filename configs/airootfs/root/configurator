@@ -1171,7 +1171,7 @@ preserve_home_helper() {
 }
 
 run_preserve_home_decide() {
-  local selected partition fstype passphrase="" plan
+  local selected partition fstype passphrase="" plan checked_user=$username status
   if (( ${#home_candidates[@]} == 1 )); then
     selected=${home_candidates[0]}
   else
@@ -1185,24 +1185,35 @@ run_preserve_home_decide() {
     passphrase=$(gum input --password --placeholder "" --prompt "$(t preserve.passphrase)") || return 1
   fi
 
-  step "$(t preserve.checking "$partition")"
-  if ! plan=$(printf '%s' "$passphrase" | preserve_home_helper probe "$disk" "$partition" "$username" 2>&1); then
+  while true; do
+    step "$(t preserve.checking "$partition")"
+    if plan=$(printf '%s' "$passphrase" | preserve_home_helper probe "$disk" "$partition" "$checked_user" 2>&1); then
+      break
+    else
+      status=$?
+    fi
+    if (( status == 3 )); then
+      say "$(t preserve.owner "$checked_user")"
+      checked_user=$(omarchy_prompt_username >&2 && printf '%s' "$username") || return 1
+      continue
+    fi
     say --foreground 1 "$plan"
     say "$(t preserve.back)"
     IFS= read -r </dev/tty
     return 1
-  fi
+  done
 
   step "$(t mode.preserveHome)"
   if jq -e '.interrupted' >/dev/null <<<"$plan"; then
     say "$(t preserve.interrupted)"
   fi
-  say "$(t preserve.detail "$partition" "/home/$username")"
+  say "$(t preserve.detail "$partition" "/home/$checked_user")"
   echo
   gum confirm --default=false --affirmative "$(t preserve.reinstall)" --negative "$(t common.back)" \
     "$(t preserve.confirm)" || return 1
 
   preserve_plan=$plan
+  username=$checked_user
   preserve_passphrase=$passphrase
   esp_mount_in_target=$(jq -r '.esp_mount' <<<"$plan")
   encrypt_installation=$(jq -r '.luks_uuid != null' <<<"$plan")
@@ -1250,7 +1261,7 @@ confirm_disk_overwrite() {
 # Choose the install mode before writing to the target disk. Deferred
 # provisioning skips this step and goes straight to full-disk confirmation.
 select_installation() {
-  local full_disk_only preserve_offered status home_candidates=()
+  local full_disk_only preserve_offered status candidate_rows home_candidates=()
 
   while true; do
     if requires_full_disk_install; then
@@ -1259,9 +1270,19 @@ select_installation() {
       full_disk_only=false
     fi
 
-    mapfile -t home_candidates < <(preserve_home_helper candidates "$disk" 2>/dev/null)
+    if ! candidate_rows=$(preserve_home_helper candidates "$disk" 2>&1); then
+      step "$(t preserve.scanFailed "$disk")"
+      say --foreground 1 "$candidate_rows"
+      say "$(t preserve.back)"
+      IFS= read -r </dev/tty
+      disk_form
+      continue
+    fi
     preserve_offered=false
-    (( ${#home_candidates[@]} > 0 )) && preserve_offered=true
+    if [[ -n $candidate_rows ]]; then
+      mapfile -t home_candidates <<<"$candidate_rows"
+      preserve_offered=true
+    fi
 
     # A full disk can still hold a compatible installation.
     if $full_disk_only && ! $preserve_offered; then

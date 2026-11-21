@@ -71,6 +71,8 @@
   "preserve.passphrase": "Current LUKS passphrase: ",
   "preserve.checking": "Checking the existing installation on %1",
   "preserve.back": "Press Enter to go back.",
+  "preserve.owner": "No matching home for %1. Enter the existing username or press Esc to go back.",
+  "preserve.scanFailed": "Could not check %1 for an existing installation",
   "preserve.interrupted": "Confirm to recover the interrupted reinstall and try again.",
   "preserve.detail": "The system on %1 will be replaced. Existing home directories, including %2, will be kept.",
   "preserve.confirm": "Reinstall Remigante on this partition?",
