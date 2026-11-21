@@ -629,9 +629,8 @@ def arch_install_system(ctx: InstallContext) -> None:
     config = handler.config
     pre_mounted = arch.is_pre_mount(config)
     reinstall = ctx.state.get("home_reinstall")
-
     if not pre_mounted:
-        if reinstall:
+        if getattr(ctx, "mode", None) == "preserve_home":
             raise RuntimeError("Reinstalling with the existing home requires a pre-mounted target.")
         info("› partitioning + formatting + encrypting")
         with _time_step("STEP.perform_filesystem_operations"):
@@ -1201,7 +1200,11 @@ def _place_root_image(ctx: InstallContext) -> None:
 
 
 def _install_root_image(ctx: InstallContext) -> None:
-    if not ctx.state.get("home_reinstall"):
+    if getattr(ctx, "mode", None) == "preserve_home":
+        reinstall = ctx.state.get("home_reinstall")
+        if not reinstall or not reinstall.mounted_target:
+            raise RuntimeError("The preserving reinstall has no prepared target.")
+    else:
         _place_root_image(ctx)
     _finish_root_image(ctx)
 
@@ -3921,6 +3924,10 @@ def cleanup_target_hook_masks(ctx: InstallContext) -> None:
     nothing was masked, so main()'s finally can call it on any exit path: an
     interrupt must never leave the installed system with its UKI rebuild hook
     pointing at /dev/null."""
+    if getattr(ctx, "mode", None) == "preserve_home":
+        reinstall = ctx.state.get("home_reinstall")
+        if not reinstall or not reinstall.mounted_target:
+            return
     _unmask_mkinitcpio_pacman_hooks(ctx, ctx.target, TARGET_DEFERRED_BOOT_HOOKS)
 
 

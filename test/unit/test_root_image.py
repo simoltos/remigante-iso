@@ -321,12 +321,23 @@ class PrepareInstallTargetTest(unittest.TestCase):
         self.assertIs(ctx.state["home_reinstall"], reinstall.return_value)
 
     def test_reinstall_never_writes_a_raw_image_to_the_filesystem(self):
-        ctx = types.SimpleNamespace(state={"home_reinstall": object()})
+        ctx = types.SimpleNamespace(mode="preserve_home",
+                                    state={"home_reinstall": types.SimpleNamespace(mounted_target=True)})
         with mock.patch.object(phases_impl, "_place_root_image") as write, \
              mock.patch.object(phases_impl, "_finish_root_image") as finish:
             phases_impl._install_root_image(ctx)
         write.assert_not_called()
         finish.assert_called_once_with(ctx)
+
+    def test_incomplete_preserving_handoff_cannot_write_an_image_or_touch_hooks(self):
+        ctx = types.SimpleNamespace(mode="preserve_home", state={}, target=Path("/mnt"))
+        with mock.patch.object(phases_impl, "_place_root_image") as write, \
+             mock.patch.object(phases_impl, "_unmask_mkinitcpio_pacman_hooks") as unmask:
+            with self.assertRaisesRegex(RuntimeError, "no prepared target"):
+                phases_impl._install_root_image(ctx)
+            phases_impl.cleanup_target_hook_masks(ctx)
+        write.assert_not_called()
+        unmask.assert_not_called()
 
 
 class VerifyPreMountedRootEmptyTest(unittest.TestCase):
