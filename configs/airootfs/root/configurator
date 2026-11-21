@@ -106,33 +106,41 @@ clear_logo() {
   gum style --foreground 2 --padding "1 0 0 $PADDING_LEFT" "$(<"$LOGO_PATH")"
 }
 
-# Draw both choices and hide the cursor that ttfx restores on exit.
-draw_welcome_choices() {
-  local row=$1 column=$2 hint=$3 install_mark='>' live_mark=' '
-  if (( $4 == 2 )); then install_mark=' '; live_mark='>'; fi
-  printf '\033[?25l\033[%d;%dH\033[32m%s\033[0m %s\033[%d;%dH\033[32m%s\033[0m Try live' \
-    "$row" "$column" "$install_mark" "$hint" "$((row + 1))" "$column" "$live_mark"
+draw_welcome_buttons() {
+  local row=$1 choice=$2
+  local install='   Install   ' live='   Try live   '
+  local column=$(((TERM_WIDTH - ${#install} - ${#live} - 2) / 2 + 1))
+  (( column > 0 )) || column=1
+
+  # Match the installer’s gum confirm buttons in the console palette.
+  local selected=$'\033[30;42m' unselected=$'\033[37;40m'
+  local install_style=$selected live_style=$unselected
+  if (( choice == 2 )); then
+    install_style=$unselected
+    live_style=$selected
+  fi
+  printf '\033[%d;%dH%s%s\033[0m  %s%s\033[0m' \
+    "$row" "$column" "$install_style" "$install" "$live_style" "$live"
 }
 
 greeter() {
   measure_terminal
 
-  local rows logo_h content_h top cols logo_row tagline_row hint_row
-  local tagline hint tpad hpad anim key='' choice=0 preview=0
+  local rows logo_h content_h top cols logo_row tagline_row action_row
+  local tagline tpad anim key='' choice=0 preview=0
   [[ ! -f /etc/remigante/live-desktop ]] || preview=1
   cols=$TERM_WIDTH
   rows=$(stty size 2>/dev/null </dev/tty | awk '{print $1}')
   [[ $rows =~ ^[0-9]+$ ]] || rows=${LINES:-24}
   logo_h=$(wc -l <"$LOGO_PATH")
 
-  # logo + blank + tagline + blank + hint
-  content_h=$((logo_h + 4))
-  (( content_h += preview ))
+  # Logo, tagline and action row with an extra blank row before the buttons.
+  content_h=$((logo_h + 4 + preview))
   top=$(((rows - content_h) / 2))
   (( top < 0 )) && top=0
   logo_row=$((top + 1))
   tagline_row=$((top + logo_h + 2))
-  hint_row=$((top + logo_h + 4))
+  action_row=$((top + content_h))
 
   printf '\033[?25l\033[H\033[2J'
 
@@ -143,12 +151,13 @@ greeter() {
   tpad=$(((cols - ${#tagline}) / 2)); (( tpad < 0 )) && tpad=0
   printf '\033[%d;%dH%s' "$tagline_row" "$((tpad + 1))" "$tagline"
 
-  hint="Press Return to Start Install"
-  hpad=$(((cols - ${#hint}) / 2)); (( hpad < 0 )) && hpad=0
   if (( preview )); then
-    draw_welcome_choices "$hint_row" "$((hpad + 1))" "$hint" "$choice"
+    draw_welcome_buttons "$action_row" "$choice"
   else
-    printf '\033[%d;%dH\033[2m%s\033[0m' "$hint_row" "$((hpad + 1))" "$hint"
+    local hint="Press Return to Start Install"
+    local hpad=$(((cols - ${#hint}) / 2))
+    (( hpad >= 0 )) || hpad=0
+    printf '\033[%d;%dH\033[2m%s\033[0m' "$action_row" "$((hpad + 1))" "$hint"
   fi
 
   # ColorShift the logo: a green base (indexed color 2) with a cyan accent (6)
@@ -195,18 +204,21 @@ greeter() {
   # ttfx leaves the tty in raw/no-echo mode when killed; restore it or the gum
   # prompts in the keyboard step that follows silently die.
   stty sane </dev/tty 2>/dev/null || true
-  # ttfx also moves the terminal cursor. Stop it on the first key so a
-  # navigation redraw never competes with a frame. Enter accepts the default.
+  # Keep the cursor hidden after ttfx restores it. Enter confirms the selected
+  # button. Escape on its own leaves the selection in place.
+  printf '\033[?25l'
   while (( preview && choice != 1 )) && [[ -n $key && $key != $'\r' ]]; do
     if [[ $key == $'\e' ]]; then
-      IFS= read -rsn2 -t 0.3 key </dev/tty || { choice=1; break; }
+      if IFS= read -rsn2 -t 0.3 key </dev/tty && [[ -z $key || $key == $'\r' ]]; then
+        break
+      fi
     fi
     case $key in
-      '[B'|'OB'|j) choice=2 ;;
-      '[A'|'OA'|k) choice=0 ;;
-      $'\t') choice=$((2 - choice)) ;;
+      '[C'|'OC'|'[B'|'OB'|j) choice=2 ;;
+      '[D'|'OD'|'[A'|'OA'|k) choice=0 ;;
+      $'\t'|'[Z') choice=$((2 - choice)) ;;
     esac
-    draw_welcome_choices "$hint_row" "$((hpad + 1))" "$hint" "$choice"
+    draw_welcome_buttons "$action_row" "$choice"
     IFS= read -rsn1 key </dev/tty || choice=1
   done
   # Reset the screen so the leftover animation frame doesn't linger under the
