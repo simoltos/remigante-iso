@@ -3,6 +3,7 @@
 # and place the resulting .pkg.tar.zst files in the offline mirror.
 
 set -e
+source /builder/local-package-archives.sh
 
 offline_mirror_dir="$1"
 if [[ -z $offline_mirror_dir ]]; then
@@ -52,7 +53,7 @@ packages=(
 # even when the checkout's generated pkgver sorts below a published build.
 # Otherwise the later generic cache pruning can silently keep edge instead.
 for pkg in "${packages[@]}"; do
-  rm -f "$offline_mirror_dir/$pkg-"*.pkg.tar.*
+  remove_local_package_archives "$offline_mirror_dir" "$pkg"
 done
 
 for pkg in "${packages[@]}"; do

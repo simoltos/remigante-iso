@@ -13,6 +13,7 @@ source /builder/node-release.sh
 source /builder/arm64-kernel-image.sh
 source /builder/archiso-aarch64-mkinitcpio.sh
 source /builder/grub-platform.sh
+source /builder/local-package-archives.sh
 
 # The online pacman configuration drives every package download below: one per
 # architecture and channel. On aarch64 it points at Omarchy's aarch64
@@ -328,7 +329,7 @@ if [[ -d /omarchy-source && -d /omarchy-pkgs ]]; then
   # earlier build fails the checksum against the mirror's fresh db.
   for local_package_name in \
     "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"; do
-    rm -f /var/cache/pacman/pkg/"$local_package_name"-*.pkg.tar.zst{,.sig}
+    remove_local_package_archives /var/cache/pacman/pkg "$local_package_name"
   done
 
   # Every board this image installs boots like the x86_64 machines: the
@@ -830,8 +831,7 @@ if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
   for local_package_name in \
     "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"; do
     local_package_file=""
-    for candidate in "$offline_mirror_dir/$local_package_name-"*.pkg.tar.*; do
-      [[ -f $candidate && $candidate != *.sig ]] || continue
+    while IFS= read -r candidate; do
       read -r candidate_name _ < <(pacman -Qp "$candidate" 2>/dev/null) || continue
       [[ $candidate_name == "$local_package_name" ]] || continue
       if [[ -n $local_package_file ]]; then
@@ -839,7 +839,7 @@ if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
         exit 1
       fi
       local_package_file="${candidate##*/}"
-    done
+    done < <(local_package_archives "$offline_mirror_dir" "$local_package_name")
     if [[ -z $local_package_file ]]; then
       echo "ERROR: local build not found for $local_package_name" >&2
       exit 1
