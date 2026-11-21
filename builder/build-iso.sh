@@ -123,7 +123,7 @@ if [[ $OMARCHY_ARCH == aarch64 ]]; then
   pacman-key --populate archlinuxarm
   # Arch Linux ARM does not publish archiso. Install its runtime dependencies
   # and run the repository's pinned submodule copy, patched for arm64-efi GRUB.
-  pacman --noconfirm -Syu \
+  pacman --noconfirm -Syuu \
     arch-install-scripts dosfstools e2fsprogs erofs-utils libarchive libisoburn \
     mtools squashfs-tools git sudo base-devel jq grub imagemagick neovim nodejs npm tree-sitter-cli btrfs-progs
   mkarchiso_command=/tmp/mkarchiso-aarch64
@@ -140,11 +140,9 @@ else
   core_server=$(channel_core_server "$online_pacman_conf") || exit 1
   sed -i "1i $core_server" /etc/pacman.d/mirrorlist
   pacman --noconfirm -Sy archlinux-keyring
-  # Full upgrade, not just -Sy: docker never re-pulls :latest once it's cached,
-  # so this container can be months behind the mirror it installs from. A plain
-  # -Sy install is then a partial upgrade — new packages linked against a glibc
-  # the container doesn't have yet.
-  pacman --noconfirm -Syu archiso git sudo base-devel jq grub imagemagick neovim nodejs npm tree-sitter-cli btrfs-progs
+  # The base container can predate the mirror or already use a newer ABI.
+  # Align all its packages with the selected channel in one transaction.
+  pacman --noconfirm -Syuu archiso git sudo base-devel jq grub imagemagick neovim nodejs npm tree-sitter-cli btrfs-progs
   mkarchiso_command=mkarchiso
 fi
 
