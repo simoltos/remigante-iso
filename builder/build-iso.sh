@@ -9,6 +9,12 @@ OMARCHY_KERNEL="${OMARCHY_KERNEL:-linux-omarchy}"
 # profiledef.sh reads both in the mkarchiso environment.
 export OMARCHY_ARCH OMARCHY_KERNEL
 
+# The offline mirror and its matching image are updated as one build.
+if [[ -d /build-artifacts ]]; then
+  exec {artifact_lock}</build-artifacts
+  flock "$artifact_lock"
+fi
+
 source /builder/node-release.sh
 source /builder/arm64-kernel-image.sh
 source /builder/archiso-aarch64-mkinitcpio.sh
@@ -321,7 +327,7 @@ fi
 # trees and drop them in the offline mirror. Otherwise pacman -Syw below
 # downloads the published versions from the omarchy network mirror.
 if [[ -d /omarchy-source && -d /omarchy-pkgs ]]; then
-  bash /builder/build-omarchy-packages.sh "$offline_mirror_dir"
+  bash /builder/build-artifact.sh packages "$offline_mirror_dir"
   LOCAL_OMARCHY_BUILD=1
   # A rebuild of the same revision produces the same filename with different
   # bytes. pacman consults /var/cache/pacman/pkg (the host's cache, kept across
@@ -937,7 +943,7 @@ image_localdb=/tmp/omarchy-root-image-localdb
 echo "[timing] root image start $(date +%s)"
 OMARCHY_IMAGE_LOCALDB_COPY="$image_localdb" OMARCHY_IMAGE_SYNC_DBS=/tmp/offlinedb/sync \
   OMARCHY_RENAMED_PACKAGES="$renamed_list" OMARCHY_UNRESOLVED_PACKAGES="$unresolved_list" \
-  bash /builder/build-root-image.sh "$image_pacman_conf" "$root_image" "${image_packages[@]}"
+  bash /builder/build-artifact.sh system "$image_pacman_conf" "$root_image" "${image_packages[@]}"
 echo "[timing] root image end $(date +%s)"
 
 # The installer verifies the image against this before it touches the disk

@@ -24,6 +24,13 @@ OMARCHY_MIRROR=stable OMARCHY_RUNTIME_PACKAGE=omarchy OMARCHY_SETTINGS_PACKAGE=o
   ./bin/omarchy-iso-make --keep-pkg-cache --local-source ../remigante ../omarchy-pkgs
 ```
 
+For the next installer edit, add `--rebuild-installer` to that command.
+It verifies and reuses the previous local packages, including their downloaded
+sources, while the desktop checkout, recipes and build tools match. The builder
+resolves the mirror again and rebuilds the system image when its inputs change.
+A regular build refreshes the local packages. `--no-cache` builds without the
+saved artifacts.
+
 The same `builder/build-iso.sh` can run as root inside a disposable Arch VM.
 It expects `/builder`, `/configs`, `/archiso`, `/omarchy-source`, `/omarchy-pkgs`
 and a writable `/out`. The VM supplies the loop device for the Btrfs image.

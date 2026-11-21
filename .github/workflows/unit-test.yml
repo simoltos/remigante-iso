@@ -60,6 +60,7 @@ jobs:
               sleep 15
             done
             /src/test/build-live-layer
+            unshare --mount --propagation private /src/test/build-artifact-cache
             unshare --mount --propagation private /src/test/reinstall-recovery
             useradd -m tester
             cp -r /src /home/tester/omarchy-iso

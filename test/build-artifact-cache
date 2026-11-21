@@ -1,0 +1,74 @@
+#!/bin/bash
+# Exercise the cache with tiny packages and images inside a private root.
+set -euo pipefail
+builder=$(cd "$(dirname "$0")/../builder" && pwd)
+root=$(mktemp -d)
+cleanup() {
+  for path in proc var/lib/pacman etc usr; do
+    if mountpoint -q "$root/$path"; then umount "$root/$path"; fi
+  done
+  rm -rf -- "$root"
+}
+trap cleanup EXIT
+mkdir -p "$root"/{usr,etc,var/lib/pacman,dev,proc,tmp,builder,build-artifacts,omarchy-source,omarchy-pkgs} \
+  "$root"/{sync,output,entry/fixture,var/cache/omarchy/mirror/offline}
+ln -s usr/bin "$root/bin"
+ln -s usr/lib "$root/lib"
+ln -s usr/lib "$root/lib64"
+mknod -m 666 "$root/dev/null" c 1 3
+ln -s /proc/self/fd "$root/dev/fd"
+mount -t proc proc "$root/proc"
+touch "$root/pacman.conf" "$root/sync/core.db"
+for path in usr etc var/lib/pacman; do mount --bind "/$path" "$root/$path"; done
+cp "$builder"/{build-artifact,build-iso,local-package-archives,attach-loop,follow-renamed-packages,ship-sync-databases}.sh \
+  "$builder/omarchy-image-write.c" "$root/builder/"
+cat >"$root/builder/build-omarchy-packages.sh" <<'SH'
+set -eu
+for name in runtime settings editor; do cp /omarchy-source/desktop "$1/$name-1-1-any.pkg.tar.zst"; done
+echo built-packages
+SH
+cat >"$root/builder/build-root-image.sh" <<'SH'
+set -eu
+mkdir -p "$OMARCHY_IMAGE_LOCALDB_COPY/local"
+echo db >"$OMARCHY_IMAGE_LOCALDB_COPY/local/ALPM_DB_VERSION"
+cp /omarchy-source/desktop "$2"
+echo built-system
+SH
+
+chroot "$root" /bin/bash -euo pipefail <<'SH'
+export OMARCHY_ARCH=x86_64 OMARCHY_KERNEL=linux OMARCHY_MIRROR=stable OMARCHY_ISO_REF=local
+export OMARCHY_RUNTIME_PACKAGE=runtime OMARCHY_SETTINGS_PACKAGE=settings OMARCHY_NVIM_PACKAGE=editor
+export OMARCHY_IMAGE_LOCALDB_COPY=/db OMARCHY_IMAGE_SYNC_DBS=/sync OMARCHY_RENAMED_PACKAGES=/renamed OMARCHY_UNRESOLVED_PACKAGES=/unresolved
+mirror=/var/cache/omarchy/mirror/offline
+packages() { bash /builder/build-artifact.sh packages "$mirror"; }
+system_image() { bash /builder/build-artifact.sh system /pacman.conf /output/root.sfs runtime settings editor; }
+index() { bsdtar -czf "$mirror/offline.db.tar.gz" -C /entry fixture; }
+
+echo first > /omarchy-source/desktop
+echo recipe > /omarchy-pkgs/PKGBUILD
+echo first > /entry/fixture/desc
+index
+packages | grep -Fx built-packages
+system_image | grep -Fx built-system
+export OMARCHY_REBUILD_INSTALLER=1
+echo buttons > /installer
+packages | grep -F 'Reusing verified packages'
+touch /db/local/stale-package
+system_image | grep -F 'Reusing verified system'
+cmp /omarchy-source/desktop /output/root.sfs
+[[ $(</db/local/ALPM_DB_VERSION) == db && ! -e /db/local/stale-package ]]
+
+echo second > /omarchy-source/desktop
+packages | grep -Fx built-packages
+echo second > /entry/fixture/desc
+index
+system_image | grep -Fx built-system
+cmp /omarchy-source/desktop /output/root.sfs
+echo updated > /sync/core.db
+system_image | grep -Fx built-system
+echo damaged > /build-artifacts/system.img
+system_image | grep -Fx built-system
+echo damaged > "$mirror/runtime-1-1-any.pkg.tar.zst"
+packages | grep -Fx built-packages
+echo 'Verified artifact reuse, invalidation and recovery.'
+SH

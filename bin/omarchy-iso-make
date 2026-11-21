@@ -4,6 +4,7 @@ set -e
 
 NO_CACHE=""
 KEEP_PKG_CACHE=""
+REBUILD_INSTALLER=""
 LOCAL_OMARCHY_PATH=""
 LOCAL_PKGS_PATH=""
 OMARCHY_ARCH="${OMARCHY_ARCH:-x86_64}"
@@ -51,6 +52,11 @@ while [[ $# -gt 0 ]]; do
     KEEP_PKG_CACHE=1
     shift
     ;;
+  --rebuild-installer)
+    REBUILD_INSTALLER=1
+    KEEP_PKG_CACHE=1
+    shift
+    ;;
   --no-boot-offer)
     NO_BOOT_OFFER=1
     shift
@@ -92,7 +98,7 @@ while [[ $# -gt 0 ]]; do
     ;;
   *)
     echo "Unknown option: $1"
-    echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
+    echo "Usage: $0 [--no-cache] [--keep-pkg-cache] [--rebuild-installer] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
     echo "       $0 --arch aarch64 [--edge|--rc] [--package-dir DIR] [--dev-ssh <pubkey>] [--local-source <omarchy-checkout> <pkgs-checkout>] [...]"
     exit 1
     ;;
@@ -252,6 +258,9 @@ if [[ -z "$NO_CACHE" ]]; then
   fi
   mkdir -p "$OFFLINE_REPO_BUILD_CACHE_DIR"
   DOCKER_ARGS+=(-v "$OFFLINE_REPO_BUILD_CACHE_DIR:/var/cache/airootfs/var/cache/omarchy")
+  artifact_cache=${OFFLINE_REPO_BUILD_CACHE_DIR%/airootfs/var/cache/omarchy}/build-artifacts
+  mkdir -p "$artifact_cache"
+  DOCKER_ARGS+=(-v "$artifact_cache:/build-artifacts" -e "OMARCHY_REBUILD_INSTALLER=${REBUILD_INSTALLER:-}")
 else
   # The locally cached :latest image is a cache too — docker run never
   # re-checks the registry for it, so refresh it when building cold.
