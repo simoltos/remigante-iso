@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack, contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .command import capture_identifier
@@ -93,9 +94,6 @@ def _matches(source: str, uuid: str, partuuid: str = "") -> bool:
 
 
 def _inspect(top: Path, fs_uuid: str, partitions: list[dict], username: str) -> dict:
-    for name in (WORKSPACE, PENDING_FACTORY):
-        if (top / name).exists() or (top / name).is_symlink():
-            raise RuntimeError(f"A previous reinstall left {name} on this filesystem.")
     if not all(_subvolume(top / name) for name in SUBVOLUMES.values()):
         raise RuntimeError("This disk does not have the standard Remigante Btrfs layout.")
     etc = top / "@" / "etc"
@@ -142,7 +140,78 @@ def _inspect(top: Path, fs_uuid: str, partitions: list[dict], username: str) -> 
 
     return {"esp_device": esp["path"], "esp_partuuid": esp["partuuid"],
             "esp_mount": esp_mount, "uid": uid, "gid": gid,
-            "home_id": _subvolume_id(top / "@home")}
+            "home_id": _subvolume_id(top / "@home"), "root_id": _subvolume_id(top / "@")}
+
+
+@dataclass
+class PendingReinstall:
+    """Identifiers needed to finish or undo an interrupted subvolume exchange."""
+
+    fs_uuid: str
+    esp_partuuid: str
+    home_id: int
+    old_root: int
+    old_factory: int | None
+    new_root: int | None = None
+    new_factory: int | None = None
+    esp_backed_up: bool = False
+
+    def save(self, workspace: Path) -> None:
+        tmp = workspace / "state.tmp"
+        tmp.write_text(json.dumps(asdict(self)))
+        tmp.replace(workspace / "state.json")
+        subprocess.run(["sync", "-f", workspace], check=True)
+
+
+def _optional_id(path: Path) -> int | None:
+    if not os.path.lexists(path):
+        return None
+    if not _subvolume(path):
+        raise RuntimeError(f"Expected a Btrfs subvolume at {path}.")
+    return _subvolume_id(path)
+
+
+def _pending(top: Path, fs_uuid: str, plan: dict) -> PendingReinstall | None:
+    workspace = top / WORKSPACE
+    factory = top / PENDING_FACTORY
+    if not os.path.lexists(workspace) and not os.path.lexists(factory):
+        return None
+    marker = workspace / "state.json"
+    if workspace.is_symlink() or not marker.is_file() or marker.is_symlink():
+        raise RuntimeError("Unrecognized reinstall files on the disk. Inspect them before reinstalling.")
+    if {entry.name for entry in workspace.iterdir()} - {"state.json", "state.tmp", "root", "efi-backup"}:
+        raise RuntimeError("Unexpected files in the reinstall directory. Inspect them before reinstalling.")
+    try:
+        previous = PendingReinstall(**json.loads(marker.read_text()))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Cannot read the previous reinstall state.") from exc
+    expected = (fs_uuid, plan["esp_partuuid"], plan["home_id"])
+    if (previous.fs_uuid, previous.esp_partuuid, previous.home_id) != expected:
+        raise RuntimeError("The previous reinstall belongs to a different filesystem, home or EFI partition.")
+    if plan["root_id"] not in {previous.old_root, previous.new_root}:
+        raise RuntimeError("The active root changed since the previous reinstall.")
+    active_factory = _optional_id(top / "@factory")
+    if active_factory not in {previous.old_factory, previous.new_factory}:
+        raise RuntimeError("The factory snapshot changed since the previous reinstall.")
+    for path, staged_id, old_id in (
+        (workspace / "root", previous.new_root, previous.old_root),
+        (factory, previous.new_factory, previous.old_factory),
+    ):
+        found = _optional_id(path)
+        # A crash can occur between creating a subvolume and recording its
+        # ID. In that case neither exchange has started.
+        if found is not None and staged_id is not None and found not in {staged_id, old_id}:
+            raise RuntimeError(f"The staged subvolume at {path} has changed.")
+    return previous
+
+
+def _efi_fallback(esp: Path) -> bool:
+    arch = "aa64" if platform.machine() == "aarch64" else "x64"
+    loader = esp / f"EFI/limine/limine_{arch}.efi"
+    fallback = esp / f"EFI/BOOT/BOOT{arch.upper()}.EFI"
+    if not loader.is_file() or not (esp / "limine.conf").is_file():
+        raise RuntimeError("The selected EFI partition does not hold the existing Limine installation.")
+    return not fallback.exists() or filecmp.cmp(loader, fallback, shallow=False)
 
 
 def _probe(disk: str, part: dict, device: str, username: str) -> dict:
@@ -157,13 +226,15 @@ def _probe(disk: str, part: dict, device: str, username: str) -> dict:
             if not any(line.split()[:3] == ["Total", "devices", "1"] for line in details.splitlines()):
                 raise RuntimeError("Reinstalling needs a Btrfs filesystem on a single partition.")
             plan = _inspect(path, fs_uuid, _partitions(disk), username)
-        with _mount(plan["esp_device"], path, "vfat", "ro"):
-            arch = "aa64" if platform.machine() == "aarch64" else "x64"
-            loader = path / f"EFI/limine/limine_{arch}.efi"
-            fallback = path / f"EFI/BOOT/BOOT{arch.upper()}.EFI"
-            if not loader.is_file() or not (path / "limine.conf").is_file():
-                raise RuntimeError("The selected EFI partition does not hold the existing Limine installation.")
-            plan["enable_fallback"] = not fallback.exists() or filecmp.cmp(loader, fallback, shallow=False)
+            pending = _pending(path, fs_uuid, plan)
+            if pending:
+                plan["interrupted"] = True
+                if pending.old_root == plan["root_id"] and pending.esp_backed_up:
+                    # The power may have gone out halfway through an EFI write.
+                    plan["enable_fallback"] = _efi_fallback(path / WORKSPACE / "efi-backup")
+        if "enable_fallback" not in plan:
+            with _mount(plan["esp_device"], path, "vfat", "ro"):
+                plan["enable_fallback"] = _efi_fallback(path)
     return {"disk": disk, "root_device": part["path"], "root_partuuid": part["partuuid"],
             "luks_uuid": part["uuid"] if part["fstype"] == "crypto_LUKS" else None,
             "fs_uuid": fs_uuid, **plan}
@@ -199,8 +270,7 @@ class Reinstall:
         self.factory = self.top / PENDING_FACTORY
         self.esp_backup = self.workspace / "efi-backup"
         self.resources = ExitStack()
-        self.owns_workspace = False
-        self.backed_up_esp = False
+        self.pending: PendingReinstall | None = None
         self.opened_mapper = False
         self.mounted_target = False
         self.activated = False
@@ -238,20 +308,36 @@ class Reinstall:
         self.esp = ctx.target / self.plan["esp_mount"].lstrip("/")
         self.top.mkdir(parents=True, exist_ok=True)
         self.resources.enter_context(_mount(device, self.top, "btrfs", "noatime,compress=zstd,subvolid=5"))
-        factory = self.top / "@factory"
-        if (factory.exists() or factory.is_symlink()) and not _subvolume(factory):
-            raise RuntimeError("The existing @factory path is not a Btrfs subvolume.")
-        self.workspace.mkdir(mode=0o700)
-        self.owns_workspace = True
+        if (_subvolume_id(self.top / "@") != self.plan["root_id"]
+                or _subvolume_id(self.top / "@home") != self.plan["home_id"]):
+            raise RuntimeError("The root or home changed after the read-only check. Select the installation again.")
+        if previous := _pending(self.top, self.plan["fs_uuid"], self.plan):
+            info("› recovering the interrupted reinstall")
+            self._finish_pending(previous)
+        pending = PendingReinstall(self.plan["fs_uuid"], self.plan["esp_partuuid"], self.plan["home_id"],
+                                   self.plan["root_id"], _optional_id(self.top / "@factory"))
+        # Publish the directory and its state together. An interrupted mkdir
+        # must never make an unrelated directory eligible for removal.
+        with tempfile.TemporaryDirectory(dir=self.top, prefix=".remigante-") as tmp:
+            initial = Path(tmp) / "pending"
+            initial.mkdir(mode=0o700)
+            pending.save(initial)
+            initial.rename(self.workspace)
+        self.pending = pending
 
         info("› copying the installation image into a new Btrfs subvolume")
         subprocess.run(["btrfs", "subvolume", "create", self.root], check=True)
+        pending.new_root = _subvolume_id(self.root)
+        pending.save(self.workspace)
         subprocess.run(["cp", "-a", "--reflink=auto", "--sparse=always", f"{BASE_SYSTEM}/.", self.root], check=True)
         self.esp_backup.mkdir()
         with tempfile.TemporaryDirectory(prefix="remigante-efi-", dir="/run") as directory:
             with _mount(self.plan["esp_device"], Path(directory), "vfat", "ro") as old_esp:
                 subprocess.run(["rsync", "-rt", f"{old_esp}/", self.esp_backup], check=True)
-        subprocess.run(["sync", "-f", self.workspace], check=True)
+        # The backup and the state that says it is complete must be on disk
+        # before the first writable ESP mount.
+        pending.esp_backed_up = True
+        pending.save(self.workspace)
 
         ctx.target.mkdir(parents=True, exist_ok=True)
         options = "noatime,compress=zstd,subvol="
@@ -268,7 +354,6 @@ class Reinstall:
                             device, path], check=True)
         self.esp.mkdir(parents=True, exist_ok=True)
         subprocess.run(["mount", "-t", "vfat", "-o", "umask=0077", self.plan["esp_device"], self.esp], check=True)
-        self.backed_up_esp = True
 
     def restore_account_ids(self) -> None:
         target = str(self.ctx.target)
@@ -286,49 +371,79 @@ class Reinstall:
         if _subvolume_id(home) != self.plan["home_id"]:
             raise RuntimeError("The mounted home no longer matches the confirmed installation.")
 
-        old_root = self.top / "@"
-        old_factory = self.top / "@factory"
-        exchange = ["mv", "--exchange", "--no-copy", "-T", "--"]
-        new_id = _subvolume_id(self.root)
-        new_factory_id = _subvolume_id(self.factory)
+        pending = self.pending
+        assert pending is not None
+        pending.new_factory = _subvolume_id(self.factory)
+        pending.save(self.workspace)
         subprocess.run(["sync", "-f", self.esp], check=True)
+        old_factory = self.top / "@factory"
+        if pending.old_factory is None:
+            self.factory.rename(old_factory)
+        else:
+            _exchange(self.factory, old_factory)
+        _exchange(self.root, self.top / "@")
+        self.activated = True
         subprocess.run(["sync", "-f", self.top], check=True)
-        had_factory = old_factory.exists()
-        try:
-            if had_factory:
-                subprocess.run([*exchange, self.factory, old_factory], check=True)
-            else:
-                self.factory.rename(old_factory)
-            subprocess.run([*exchange, self.root, old_root], check=True)
-        finally:
-            self.activated = _subvolume_id(old_root) == new_id
-            if not self.activated and old_factory.exists() and _subvolume_id(old_factory) == new_factory_id:
-                if had_factory:
-                    subprocess.run([*exchange, self.factory, old_factory], check=True)
+
+    def _finish_pending(self, pending: PendingReinstall) -> None:
+        active = _subvolume_id(self.top / "@")
+        factory = self.top / "@factory"
+        if active == pending.old_root:
+            if pending.esp_backed_up:
+                info("› restoring the previous EFI files")
+                if not self.esp_backup.is_dir() or self.esp_backup.is_symlink():
+                    raise RuntimeError("The EFI backup is unavailable.")
+                _efi_fallback(self.esp_backup)
+                with tempfile.TemporaryDirectory(dir="/run") as tmp:
+                    with _mount(self.plan["esp_device"], Path(tmp), "vfat", "umask=0077") as esp:
+                        subprocess.run(["rsync", "-rt", "--ignore-times", "--delete",
+                                        f"{self.esp_backup}/", esp], check=True)
+                        subprocess.run(["sync", "-f", esp], check=True)
+            if pending.new_factory is not None and _optional_id(factory) == pending.new_factory:
+                if pending.old_factory is None:
+                    factory.rename(self.factory)
                 else:
-                    old_factory.rename(self.factory)
+                    if _optional_id(self.factory) != pending.old_factory:
+                        raise RuntimeError("Could not identify the previous factory snapshot.")
+                    _exchange(self.factory, factory)
+        elif active == pending.new_root:
+            default = capture_identifier(["btrfs", "subvolume", "get-default", str(self.top)],
+                                         "the default Btrfs subvolume").split()
+            if default[:2] == ["ID", str(pending.old_root)]:
+                subprocess.run(["btrfs", "subvolume", "set-default", str(active), self.top], check=True)
+        else:
+            raise RuntimeError("Could not identify the active root; the staged files were kept.")
+
+        if pending.esp_backed_up:
+            # A later recovery must never restore a partially removed backup.
+            pending.esp_backed_up = False
+            pending.save(self.workspace)
+        for subvolume in (self.factory, self.root):
+            if _optional_id(subvolume) is not None:
+                subprocess.run(["btrfs", "subvolume", "delete", "--recursive", subvolume], check=True)
+        if self.esp_backup.exists():
+            shutil.rmtree(self.esp_backup)
+        # Move the marker out atomically so a crash during its removal
+        # cannot leave an unrecognizable active workspace.
+        with tempfile.TemporaryDirectory(dir=self.top, prefix=".remigante-") as tmp:
+            self.workspace.rename(Path(tmp) / "finished")
         subprocess.run(["sync", "-f", self.top], check=True)
 
     def cleanup(self) -> None:
         try:
-            if self.backed_up_esp and not self.activated:
-                info("› restoring the existing EFI files after the failed reinstall")
-                subprocess.run(["rsync", "-rt", "--ignore-times", "--delete", f"{self.esp_backup}/", self.esp], check=True)
-                subprocess.run(["sync", "-f", self.esp], check=True)
             if self.mounted_target and not self.activated:
                 subprocess.run(["omarchy-release-install-target", "--keep-mappers", self.ctx.target], check=True)
-            if self.owns_workspace:
-                for subvolume in (self.factory, self.root):
-                    if subvolume.exists():
-                        subprocess.run(["btrfs", "subvolume", "delete", "--recursive", subvolume], check=True)
-                if self.esp_backup.exists():
-                    shutil.rmtree(self.esp_backup)
-                self.workspace.rmdir()
+            if self.pending:
+                self._finish_pending(self.pending)
         finally:
             self.resources.close()
             # The normal dashboard release unmounts the finished target.
             if self.opened_mapper and not self.activated:
                 subprocess.run(["cryptsetup", "close", MAPPER], check=True)
+
+
+def _exchange(staged: Path, active: Path) -> None:
+    subprocess.run(["mv", "--exchange", "--no-copy", "-T", "--", staged, active], check=True)
 
 
 def main() -> int:

@@ -10,6 +10,7 @@ archinstall's import-time CLI parsing from seeing Omarchy-specific flags.
 
 from __future__ import annotations
 
+import fcntl
 import sys
 from .context import InstallContext
 from .phases import PhaseError, run
@@ -72,6 +73,17 @@ def build_phases(ctx: InstallContext):
 
 
 def main() -> int:
+    # The configurator and dashboard share one target and one state directory.
+    with open("/run/lock/omarchy-iso-install.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            error("An installation is already running.")
+            return 1
+        return _install()
+
+
+def _install() -> int:
     try:
         ctx = InstallContext.from_env()
     except RuntimeError as e:

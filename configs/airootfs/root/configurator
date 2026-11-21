@@ -1194,6 +1194,9 @@ run_preserve_home_decide() {
   fi
 
   step "$(t mode.preserveHome)"
+  if jq -e '.interrupted' >/dev/null <<<"$plan"; then
+    say "$(t preserve.interrupted)"
+  fi
   say "$(t preserve.detail "$partition" "/home/$username")"
   echo
   gum confirm --default=false --affirmative "$(t preserve.reinstall)" --negative "$(t common.back)" \
