@@ -64,3 +64,16 @@ class RecoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unrecognized reinstall"):
             self.read()
         self.assertTrue(self.workspace.is_dir())
+
+    def test_refuses_an_incomplete_factory_pair_after_the_root_switch(self):
+        self.plan["root_id"] = self.pending.new_root
+        self.ids[self.workspace / "root"] = self.pending.old_root
+        with self.assertRaisesRegex(RuntimeError, "factory snapshot"):
+            self.read()
+
+    def test_a_missing_original_factory_is_not_an_uncreated_new_snapshot(self):
+        self.pending.new_factory = None
+        (self.workspace / "state.json").write_text(json.dumps(asdict(self.pending)))
+        self.ids.pop(self.top / "@factory")
+        with self.assertRaisesRegex(RuntimeError, "factory snapshot"):
+            self.read()

@@ -196,19 +196,25 @@ def _pending(top: Path, fs_uuid: str, plan: dict) -> PendingReinstall | None:
     expected = (fs_uuid, plan["esp_partuuid"], plan["home_id"])
     if (previous.fs_uuid, previous.esp_partuuid, previous.home_id) != expected:
         raise RuntimeError("The previous reinstall belongs to a different filesystem, home or EFI partition.")
-    if plan["root_id"] not in {previous.old_root, previous.new_root}:
+    active_root = plan["root_id"]
+    if active_root not in {previous.old_root, previous.new_root}:
         raise RuntimeError("The active root changed since the previous reinstall.")
     active_factory = _optional_id(top / "@factory")
-    if active_factory not in {previous.old_factory, previous.new_factory}:
+    root_switched = active_root != previous.old_root
+    valid_factories = {previous.old_factory}
+    if previous.new_factory is not None:
+        valid_factories.add(previous.new_factory)
+    if active_factory not in valid_factories or (root_switched and active_factory != previous.new_factory):
         raise RuntimeError("The factory snapshot changed since the previous reinstall.")
-    for path, staged_id, old_id in (
-        (workspace / "root", previous.new_root, previous.old_root),
-        (factory, previous.new_factory, previous.old_factory),
+    for path, staged_id, swapped, old_id in (
+        (workspace / "root", previous.new_root, root_switched, previous.old_root),
+        (factory, previous.new_factory, active_factory != previous.old_factory, previous.old_factory),
     ):
         found = _optional_id(path)
         # A crash can occur between creating a subvolume and recording its
         # ID. In that case neither exchange has started.
-        if found is not None and staged_id is not None and found not in {staged_id, old_id}:
+        expected_id = old_id if swapped else staged_id
+        if found is not None and staged_id is not None and found != expected_id:
             raise RuntimeError(f"The staged subvolume at {path} has changed.")
     return previous
 

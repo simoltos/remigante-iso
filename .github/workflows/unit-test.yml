@@ -55,11 +55,12 @@ jobs:
             # mirror that drops one file must not fail the tests.
             sed -i "1i Server = https://mirror.omarchy.org/\$repo/os/\$arch" /etc/pacman.d/mirrorlist
             for attempt in 1 2 3; do
-              pacman -Syu --noconfirm --needed python parted gcc diffutils jq zip unzip openssh patch git terminus-font imagemagick tesseract tesseract-data-eng squashfs-tools btrfs-progs >/dev/null && break
+              pacman -Syu --noconfirm --needed python parted gcc diffutils jq zip unzip openssh patch git terminus-font imagemagick tesseract tesseract-data-eng squashfs-tools btrfs-progs dosfstools rsync >/dev/null && break
               [ "$attempt" -lt 3 ] || { echo "::error::the test container could not install its tools"; exit 1; }
               sleep 15
             done
             /src/test/build-live-layer
+            unshare --mount --propagation private /src/test/reinstall-recovery
             useradd -m tester
             cp -r /src /home/tester/omarchy-iso
             chown -R tester /home/tester/omarchy-iso

@@ -1,0 +1,113 @@
+#!/usr/bin/python
+"""Run as root in the build container. Only disposable loop images are written."""
+
+import platform
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "configs/airootfs/usr/share/omarchy-iso"))
+from orchestrator.preserve_home import PendingReinstall, Reinstall, _exchange, _mount, _pending, _subvolume_id
+
+
+def run(*args):
+    return subprocess.check_output(args, text=True).strip()
+
+
+class InterruptedInstallTest(unittest.TestCase):
+    def image(self, name, size):
+        path = self.temp / name
+        run("truncate", "-s", size, path)
+        loop = run(REPO / "builder/attach-loop.sh", path)
+        self.addCleanup(run, "losetup", "-d", loop)
+        return loop
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.temp = Path(tmp.name)
+        device = self.image("btrfs.img", "192M")
+        self.efi = self.image("esp.img", "64M")
+        run("mkfs.btrfs", "-q", device)
+        run("mkfs.fat", "-F32", self.efi)
+        self.install = Reinstall(SimpleNamespace(state_dir=self.temp))
+        self.top = self.install.top
+        self.top.mkdir()
+        self.enterContext(_mount(device, self.top, "btrfs", "subvolid=5"))
+        self.esp = self.temp / "esp"
+        self.esp.mkdir()
+        for name in ("@", "@home"):
+            run("btrfs", "subvolume", "create", self.top / name)
+        (self.top / "@home/thesis").write_text("keep")
+        self.home_id = _subvolume_id(self.top / "@home")
+        self.old_id = _subvolume_id(self.top / "@")
+        run("btrfs", "subvolume", "set-default", str(self.old_id), self.top)
+        self.install.workspace.mkdir(mode=0o700)
+        run("btrfs", "subvolume", "create", self.install.root)
+        self.new_id = _subvolume_id(self.install.root)
+
+    def interrupt(self, *, root_switched=False, old_factory=True):
+        active_factory = self.top / "@factory"
+        old_factory_id = None
+        if old_factory:
+            run("btrfs", "subvolume", "snapshot", "-r", self.top / "@", active_factory)
+            old_factory_id = _subvolume_id(active_factory)
+        run("btrfs", "subvolume", "snapshot", "-r", self.install.root, self.install.factory)
+        staged_id = _subvolume_id(self.install.factory)
+
+        backup = self.install.esp_backup
+        (backup / "EFI/limine").mkdir(parents=True)
+        arch = "aa64" if platform.machine() == "aarch64" else "x64"
+        (backup / f"EFI/limine/limine_{arch}.efi").write_bytes(b"old loader")
+        (backup / "limine.conf").write_text("original configuration")
+        with _mount(self.efi, self.esp, "vfat", "rw"):
+            (self.esp / "limine.conf").write_text("new configuration")
+            (self.esp / "new-file").touch()
+        record = PendingReinstall("fs", "esp", self.home_id, self.old_id, old_factory_id,
+                                  self.new_id, staged_id, esp_backed_up=True)
+        record.save(self.install.workspace)
+        if old_factory:
+            _exchange(self.install.factory, active_factory)
+        else:
+            self.install.factory.rename(active_factory)
+        if root_switched:
+            _exchange(self.install.root, self.top / "@")
+
+        # A fresh installer after power loss has only the on-disk record.
+        retry = Reinstall(SimpleNamespace(state_dir=self.temp))
+        retry.plan = {"esp_device": self.efi, "esp_partuuid": "esp", "home_id": self.home_id,
+                      "root_id": _subvolume_id(self.top / "@")}
+        retry._finish_pending(_pending(self.top, "fs", retry.plan))
+        self.assertEqual(_subvolume_id(self.top / "@home"), self.home_id)
+        self.assertEqual((self.top / "@home/thesis").read_text(), "keep")
+        self.assertFalse(retry.workspace.exists())
+        self.assertFalse(retry.factory.exists())
+        self.assertIsNone(_pending(self.top, "fs", retry.plan))
+        wanted = self.new_id if root_switched else self.old_id
+        self.assertEqual(_subvolume_id(self.top / "@"), wanted)
+        self.assertEqual(run("btrfs", "subvolume", "get-default", self.top).split()[:2], ["ID", str(wanted)])
+        if root_switched or old_factory:
+            self.assertEqual(_subvolume_id(active_factory), staged_id if root_switched else old_factory_id)
+        else:
+            self.assertFalse(active_factory.exists())
+        with _mount(self.efi, self.esp, "vfat", "ro"):
+            self.assertEqual((self.esp / "limine.conf").read_text(),
+                             "new configuration" if root_switched else "original configuration")
+            self.assertEqual((self.esp / "new-file").exists(), root_switched)
+
+    def test_restore_efi_and_factory_before_root_switch(self):
+        self.interrupt()
+
+    def test_accept_validated_root_and_update_default_after_switch(self):
+        self.interrupt(root_switched=True)
+
+    def test_rollback_without_a_previous_factory(self):
+        self.interrupt(old_factory=False)
+
+
+if __name__ == "__main__":
+    unittest.main()
