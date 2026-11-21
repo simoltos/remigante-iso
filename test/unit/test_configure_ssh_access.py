@@ -94,6 +94,23 @@ class ConfigureSshAccessTest(unittest.TestCase):
         mode = stat.S_IMODE((self.target / "home" / "jeff" / ".ssh").stat().st_mode)
         self.assertEqual(mode, 0o700)
 
+    def test_reinstall_keeps_home_keys_and_scrubs_installer_keys_from_the_factory(self):
+        home_keys = self.authorized_keys()
+        home_keys.parent.mkdir(parents=True)
+        home_keys.write_text("original\n")
+        ctx = self.ctx(authorized_keys="ssh-ed25519 AAAA from-cidata\n")
+        ctx.mode = "preserve_home"
+        phases_impl.configure_ssh_access(ctx)
+        config = self.target / phases_impl.REINSTALL_SSH_CONFIG
+        installed_keys = self.target / phases_impl.REINSTALL_SSH_KEYS / ctx.username
+        self.assertIn(f"/{phases_impl.REINSTALL_SSH_KEYS}/%u", config.read_text())
+        self.assertEqual(installed_keys.read_text(), ctx.authorized_keys_path.read_text())
+        self.assertEqual(home_keys.read_text(), "original\n")
+        phases_impl._scrub_factory_snapshot(self.target)
+        self.assertFalse(installed_keys.exists())
+        self.assertFalse(config.exists())
+        self.assertEqual(home_keys.read_text(), "original\n")
+
     def test_authorized_keys_is_private(self):
         self.configure(authorized_keys="ssh-ed25519 AAAA jeff@host\n")
         self.assertEqual(stat.S_IMODE(self.authorized_keys().stat().st_mode), 0o600)

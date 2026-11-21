@@ -258,6 +258,9 @@ class Reinstall:
         subprocess.run(["mount", "-t", "btrfs", "-o", options + str(self.root.relative_to(self.top)),
                         device, ctx.target], check=True)
         self.mounted_target = True
+        # useradd and package hooks can populate /home during setup. Keep
+        # that temporary skeleton out of the root and its factory snapshot.
+        subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", ctx.target / "home"], check=True)
         for dest in ("/var/log", "/var/cache/pacman/pkg"):
             path = ctx.target / dest.lstrip("/")
             path.mkdir(parents=True, exist_ok=True)
@@ -276,6 +279,13 @@ class Reinstall:
         subprocess.run(["arch-chroot", target, "usermod", "-u", uid, "-g", gid, "--", username], check=True)
 
     def activate(self) -> None:
+        home = self.ctx.target / "home"
+        device = self.ctx.omarchy_install["storage"]["root_mapper"]
+        subprocess.run(["umount", home], check=True)
+        subprocess.run(["mount", "-t", "btrfs", "-o", "noatime,compress=zstd,subvol=@home", device, home], check=True)
+        if _subvolume_id(home) != self.plan["home_id"]:
+            raise RuntimeError("The mounted home no longer matches the confirmed installation.")
+
         old_root = self.top / "@"
         old_factory = self.top / "@factory"
         exchange = ["mv", "--exchange", "--no-copy", "-T", "--"]

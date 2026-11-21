@@ -3072,6 +3072,10 @@ def configure_login(ctx: InstallContext) -> None:
 # so all three pieces -- keys, service, firewall -- have to be done here.
 # ─────────────────────────────────────────────────────────────────────────────
 
+REINSTALL_SSH_KEYS = "etc/ssh/remigante-authorized-keys"
+REINSTALL_SSH_CONFIG = "etc/ssh/sshd_config.d/40-remigante-install-keys.conf"
+
+
 def configure_ssh_access(ctx: InstallContext) -> None:
     if ctx.authorized_keys_path is None:
         return
@@ -3088,6 +3092,20 @@ def configure_ssh_access(ctx: InstallContext) -> None:
         staged = provisioning_dir / "authorized_keys"
         staged.write_text("".join(f"{key}\n" for key in keys))
         staged.chmod(0o600)
+    elif getattr(ctx, "mode", None) == "preserve_home":
+        # The owner keeps their .ssh files. sshd also reads the keys that
+        # this install explicitly requested, even on the first login.
+        directory = ctx.target / REINSTALL_SSH_KEYS
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o755)
+        authorized_keys = directory / ctx.username
+        authorized_keys.write_text("".join(f"{key}\n" for key in keys))
+        authorized_keys.chmod(0o644)
+        config = ctx.target / REINSTALL_SSH_CONFIG
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(
+            f"AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys2 /{REINSTALL_SSH_KEYS}/%u\n"
+        )
     else:
         info(f"› installing {len(keys)} SSH key(s) for {ctx.username}")
 
@@ -3827,6 +3845,7 @@ def _snapshot_factory(root_subvol: Path, factory: Path) -> None:
 # The mkinitcpio/cmdline drop-ins go with the keyfile — a reset rebuild would
 # otherwise fail on FILES pointing at a scrubbed path.
 FACTORY_SCRUB_PATHS = (
+    REINSTALL_SSH_CONFIG,
     "var/lib/omarchy/provisioning/authorized_keys",
     "var/lib/omarchy/provisioning/luks-key",
     "etc/omarchy/provisioning.key",
@@ -3841,6 +3860,9 @@ FACTORY_SCRUB_PATHS = (
 def _scrub_factory_snapshot(factory: Path) -> None:
     for rel in FACTORY_SCRUB_PATHS:
         (factory / rel).unlink(missing_ok=True)
+    keys = factory / REINSTALL_SSH_KEYS
+    if keys.is_dir():
+        shutil.rmtree(keys)
 
 
 def _findmnt_value(path: Path, column: str) -> str | None:
