@@ -67,6 +67,12 @@ fi
 # written to the target as it is, so neither choice affects install speed; the
 # installed system writes new data at its own mount option either way.
 IMAGE_COMPRESS="compress-force=zstd:15"
+# The mountable live image also gets a SquashFS compression pass. Use a
+# faster Btrfs level for this format while keeping the installer's 256 KiB
+# independently decodable blocks.
+if [[ $output == *.sfs ]]; then
+  IMAGE_COMPRESS="compress-force=zstd:9"
+fi
 # Name of the image's one subvolume. The installer renames it to @ after the
 # write (phases_impl.ROOT_IMAGE_SUBVOLUME).
 IMAGE_SUBVOLUME="omarchy-root"
@@ -455,7 +461,7 @@ if [[ $output == *.sfs ]]; then
   # One mountable file for the live desktop and the installer's block writer.
   mkdir -p "$work/squashfs"
   ln "$backing" "$work/squashfs/omarchy-root.img"
-  mksquashfs "$work/squashfs" "$output" -comp zstd -Xcompression-level 19 -b 256K \
+  mksquashfs "$work/squashfs" "$output" -comp zstd -Xcompression-level 7 -b 256K \
     -no-fragments -noappend -no-xattrs -quiet
 else
   echo "Packing the root image as 256 KiB zstd frames"
