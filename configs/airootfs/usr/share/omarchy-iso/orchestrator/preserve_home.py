@@ -14,7 +14,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .command import capture_identifier
+from .command import capture, capture_identifier
 from .context import InstallContext
 from .ui import info
 
@@ -272,6 +272,15 @@ def probe(disk: str, device: str, username: str, password: bytes) -> dict:
             subprocess.run(["cryptsetup", "close", mapper], check=True)
 
 
+def _copy_system(source: Path, target: Path) -> None:
+    # Stop on a fatal write error. cp -a keeps trying every remaining file
+    # after ENOSPC and can fill the live installer's log as well.
+    copied = capture(["rsync", "-aHAXS", "--numeric-ids", f"{source}/", str(target)])
+    if copied.returncode:
+        reason = next(iter(copied.stderr.splitlines()), f"rsync exited {copied.returncode}")
+        raise RuntimeError(f"Could not stage the new system: {reason}")
+
+
 class Reinstall:
     """Stage a new root, keeping the original @ and @home separate from setup."""
 
@@ -343,7 +352,7 @@ class Reinstall:
         subprocess.run(["btrfs", "subvolume", "create", self.root], check=True)
         pending.new_root = _subvolume_id(self.root)
         pending.save(self.workspace)
-        subprocess.run(["cp", "-a", "--reflink=auto", "--sparse=always", f"{BASE_SYSTEM}/.", self.root], check=True)
+        _copy_system(BASE_SYSTEM, self.root)
         self.esp_backup.mkdir()
         with tempfile.TemporaryDirectory(prefix="remigante-efi-", dir="/run") as directory:
             with _mount(self.plan["esp_device"], Path(directory), "vfat", "ro") as old_esp:

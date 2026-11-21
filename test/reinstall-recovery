@@ -1,6 +1,7 @@
 #!/usr/bin/python
 """Run as root in the build container. Only disposable loop images are written."""
 
+import os
 import platform
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "configs/airootfs/usr/share/omarchy-iso"))
-from orchestrator.preserve_home import PendingReinstall, Reinstall, _exchange, _mount, _pending, _subvolume_id
+from orchestrator.preserve_home import PendingReinstall, Reinstall, _copy_system, _exchange, _mount, _pending, _subvolume_id
 
 
 def run(*args):
@@ -107,6 +108,26 @@ class InterruptedInstallTest(unittest.TestCase):
 
     def test_rollback_without_a_previous_factory(self):
         self.interrupt(old_factory=False)
+
+    def test_copy_system_preserves_links_owners_and_attributes(self):
+        source = self.temp / "image"
+        source.mkdir()
+        item = source / "file"
+        item.write_bytes(b"contents")
+        os.chown(item, 1003, 1005)
+        item.chmod(0o751)
+        os.setxattr(item, "user.test", b"metadata")
+        os.link(item, source / "alias")
+        (source / "symlink").symlink_to("file")
+        _copy_system(source, self.install.root)
+        copy = self.install.root / "file"
+        self.assertEqual(copy.read_bytes(), item.read_bytes())
+        self.assertEqual(copy.stat().st_mtime_ns, item.stat().st_mtime_ns)
+        self.assertEqual(copy.stat().st_mode, item.stat().st_mode)
+        self.assertEqual((copy.stat().st_uid, copy.stat().st_gid), (1003, 1005))
+        self.assertEqual(os.getxattr(copy, "user.test"), b"metadata")
+        self.assertTrue(copy.samefile(self.install.root / "alias"))
+        self.assertEqual((self.install.root / "symlink").readlink(), Path("file"))
 
 
 if __name__ == "__main__":
