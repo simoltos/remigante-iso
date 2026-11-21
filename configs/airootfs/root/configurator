@@ -608,7 +608,11 @@ disk_abort_hook() {
 # asked for after first login rather than here.
 # Deferred-provisioning installs defer the user to first boot: no credentials, and on encrypted
 # targets the orchestrator generates a throwaway LUKS passphrase itself.
-write_user_files() {
+write_user_files() (
+  umask 077
+  if [[ -f user_credentials.json ]]; then
+    chmod 0600 user_credentials.json || return 1
+  fi
   printf '%s\n' "$encrypt_installation" >user_encrypt_installation.txt
 
   if $defer_provisioning; then
@@ -620,14 +624,21 @@ _EOF_
     return
   fi
 
-  local password_escaped password_hash_escaped username_escaped
-  password_escaped=$(echo -n "$password" | jq -Rsa)
+  local password_hash_escaped username_escaped
   password_hash_escaped=$(echo -n "$password_hash" | jq -Rsa)
   username_escaped=$(echo -n "$username" | jq -Rsa)
 
   local credentials_encryption_line=""
   if [[ $encrypt_installation == true ]]; then
-    credentials_encryption_line="    \"encryption_password\": $password_escaped,"
+    local disk_password=$password
+    if [[ $install_target == "preserve_home" ]]; then
+      # The old LUKS passphrase can differ from the new login password.
+      disk_password=${preserve_passphrase:-}
+      [[ ${1:-} != "dry" ]] || disk_password=""
+    fi
+    if [[ -n $disk_password ]]; then
+      credentials_encryption_line="    \"encryption_password\": $(printf '%s' "$disk_password" | jq -Rsa),"
+    fi
   fi
 
   cat <<-_EOF_ >user_credentials.json
@@ -644,7 +655,7 @@ $credentials_encryption_line
     ]
 }
 _EOF_
-}
+)
 
 # Show what a dry run would have written, then leave no trace behind.
 print_dry_run_files() {
@@ -975,6 +986,26 @@ run_partition_execute() {
   # ignores the "Limine" NVRAM entry (some AMI/MSI boards) still finds the
   # install through the removable-media path, which is the only route left
   # when a boot variable does not survive.
+  local storage
+  storage=$(cat <<-_EOF_
+{
+    "esp_device": "$efi_dev",
+    "root_device": "$root_partition_device",
+    "root_mapper": "$root_mapper",
+    "luks_uuid": $luks_uuid_json,
+    "kernel": "$kernel_choice"
+}
+_EOF_
+)
+  write_pre_mounted_configuration protected "$storage"
+}
+
+write_pre_mounted_configuration() {
+  local mode=$1 storage=$2 plan_line=""
+  if [[ $mode == "preserve_home" ]]; then
+    plan_line="\"preserve_home\": $preserve_plan,"
+  fi
+
   cat <<-_EOF_ >user_configuration.json
 {
     "app_config": null,
@@ -987,7 +1018,8 @@ run_partition_execute() {
         "input_method": "${keyboard_input_method:-none}",
         "input_xkb_layout": "${keyboard_xkb_layout:-}",
         "language": "$language",
-        "mode": "protected",
+        "mode": "$mode",
+        $plan_line
         "target_mount": "/mnt",
         "boot": {
             "esp_mount": "$esp_mount_in_target",
@@ -995,13 +1027,7 @@ run_partition_execute() {
             "efi_binary": "$limine_efi_binary",
             "enable_fallback": true
         },
-        "storage": {
-            "esp_device": "$efi_dev",
-            "root_device": "$root_partition_device",
-            "root_mapper": "$root_mapper",
-            "luks_uuid": $luks_uuid_json,
-            "kernel": "$kernel_choice"
-        }
+        "storage": $storage
     },
     "disk_config": {
         "config_type": "pre_mounted_config",
@@ -1128,13 +1154,56 @@ install_mode_form() {
   if [[ -d /sys/firmware/efi ]] && ! $full_disk_only; then
     free_space_offered=true
   fi
-  local -A labels=([full_disk]="$(t mode.fullDisk)" [free_space]="$(t mode.freeSpace)" [other_disk]="$(t mode.otherDisk)")
+  local -A labels=([full_disk]="$(t mode.fullDisk)" [free_space]="$(t mode.freeSpace)"
+    [preserve_home]="$(t mode.preserveHome)" [other_disk]="$(t mode.otherDisk)")
   while read -r choice; do
     choices+=("${labels[$choice]}"$'\t'"$choice")
-  done < <(install_mode_choices "$free_space_offered")
+  done < <(install_mode_choices "$free_space_offered" "$preserve_offered")
 
   step "$(t mode.intro)"
   install_mode=$(gum choose --label-delimiter $'\t' --header "$(t mode.header "$disk")" "${choices[@]}")
+}
+
+preserve_home_helper() {
+  local share
+  share=$(dirname -- "$DISK_PARTITIONING")
+  PYTHONPATH="$share" python -m orchestrator.preserve_home "$@"
+}
+
+run_preserve_home_decide() {
+  local selected partition fstype passphrase="" plan
+  if (( ${#home_candidates[@]} == 1 )); then
+    selected=${home_candidates[0]}
+  else
+    step "$(t preserve.partition)"
+    selected=$(gum choose "${home_candidates[@]}") || return 1
+  fi
+  IFS=$'\t' read -r partition fstype <<<"$selected"
+
+  if [[ $fstype == "crypto_LUKS" ]]; then
+    step "$(t preserve.unlock "$partition")"
+    passphrase=$(gum input --password --placeholder "" --prompt "$(t preserve.passphrase)") || return 1
+  fi
+
+  step "$(t preserve.checking "$partition")"
+  if ! plan=$(printf '%s' "$passphrase" | preserve_home_helper probe "$disk" "$partition" "$username" 2>&1); then
+    say --foreground 1 "$plan"
+    say "$(t preserve.back)"
+    IFS= read -r </dev/tty
+    return 1
+  fi
+
+  step "$(t mode.preserveHome)"
+  say "$(t preserve.detail "$partition" "/home/$username")"
+  echo
+  gum confirm --default=false --affirmative "$(t preserve.reinstall)" --negative "$(t common.back)" \
+    "$(t preserve.confirm)" || return 1
+
+  preserve_plan=$plan
+  preserve_passphrase=$passphrase
+  esp_mount_in_target=$(jq -r '.esp_mount' <<<"$plan")
+  encrypt_installation=$(jq -r '.luks_uuid != null' <<<"$plan")
+  kernel_choice=$(detect_kernel)
 }
 
 confirm_disk_overwrite() {
@@ -1175,13 +1244,10 @@ confirm_disk_overwrite() {
   done
 }
 
-# Decide what and how to install: sets install_target (full_disk|free_space),
-# install_target and encrypt_installation. Nothing is written to disk yet —
-# the user step runs between this and the execution below. (deferred provisioning never
-# reaches here; it's armed by Ctrl+C on the keyboard screen and goes straight to
-# disk selection.)
+# Choose the install mode before writing to the target disk. Deferred
+# provisioning skips this step and goes straight to full-disk confirmation.
 select_installation() {
-  local full_disk_only status
+  local full_disk_only preserve_offered status home_candidates=()
 
   while true; do
     if requires_full_disk_install; then
@@ -1190,9 +1256,12 @@ select_installation() {
       full_disk_only=false
     fi
 
-    # With no free-space option to offer, a full-disk install is the only
-    # mode, so skip the picker and go straight to the overwrite confirm.
-    if $full_disk_only; then
+    mapfile -t home_candidates < <(preserve_home_helper candidates "$disk" 2>/dev/null)
+    preserve_offered=false
+    (( ${#home_candidates[@]} > 0 )) && preserve_offered=true
+
+    # A full disk can still hold a compatible installation.
+    if $full_disk_only && ! $preserve_offered; then
       install_mode="full_disk"
     else
       # Esc goes back to the disk list, as "Choose a different disk" does. Ctrl+C
@@ -1212,11 +1281,17 @@ select_installation() {
         fi
         # When the picker was skipped, declining the overwrite means the user
         # wants a different disk.
-        $full_disk_only && disk_form
+        if $full_disk_only && ! $preserve_offered; then disk_form; fi
         ;;
       free_space)
         if run_partition_decide; then
           install_target="free_space"
+          return 0
+        fi
+        ;;
+      preserve_home)
+        if run_preserve_home_decide; then
+          install_target="preserve_home"
           return 0
         fi
         ;;
@@ -1293,7 +1368,16 @@ fi
 
 clear
 
-write_user_files
+write_user_files "$@" || abort
+unset preserve_passphrase
+
+if [[ $install_target == "preserve_home" ]]; then
+  write_pre_mounted_configuration preserve_home '{}' || abort
+  if [[ ${1:-} == "dry" ]]; then
+    print_dry_run_files
+  fi
+  exit 0
+fi
 
 if [[ $install_target == "free_space" ]]; then
   # Refuse a corrupt or missing install medium before we partition or format

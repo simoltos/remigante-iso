@@ -312,6 +312,22 @@ class PrepareInstallTargetTest(unittest.TestCase):
              "verify_pre_mounted_root_empty", "verify_install_medium", "_prepare_archinstall_config"],
         )
 
+    def test_reinstall_checks_medium_before_preparing_the_existing_filesystem(self):
+        ctx = types.SimpleNamespace(mode="preserve_home", state={})
+        with mock.patch("orchestrator.preserve_home.Reinstall") as reinstall:
+            reinstall.return_value.prepare.side_effect = lambda: self.calls.append("stage_reinstall")
+            phases_impl.prepare_install_target(ctx)
+        self.assertEqual(self.calls, ["verify_install_medium", "_prepare_archinstall_config", "stage_reinstall"])
+        self.assertIs(ctx.state["home_reinstall"], reinstall.return_value)
+
+    def test_reinstall_never_writes_a_raw_image_to_the_filesystem(self):
+        ctx = types.SimpleNamespace(state={"home_reinstall": object()})
+        with mock.patch.object(phases_impl, "_place_root_image") as write, \
+             mock.patch.object(phases_impl, "_finish_root_image") as finish:
+            phases_impl._install_root_image(ctx)
+        write.assert_not_called()
+        finish.assert_called_once_with(ctx)
+
 
 class VerifyPreMountedRootEmptyTest(unittest.TestCase):
     """The root image is written over the whole btrfs behind a pre-mounted @,

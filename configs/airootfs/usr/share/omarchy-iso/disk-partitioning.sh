@@ -208,11 +208,15 @@ install_disk_candidates() {
 # select_installation acts on. Full disk comes first on every disk, as the
 # common case; the overwrite confirmation that follows it names the disk
 # before anything is erased. $1 is whether the free-space mode is on offer at
-# all (UEFI, a partition table and room for Omarchy).
+# all (UEFI, a partition table and room for Omarchy). $2 is whether there is
+# an existing partition to examine for a preserving reinstall.
 install_mode_choices() {
   printf '%s\n' full_disk
   if [[ $1 == true ]]; then
     printf '%s\n' free_space
+  fi
+  if [[ ${2:-false} == true ]]; then
+    printf '%s\n' preserve_home
   fi
   printf '%s\n' other_disk
 }

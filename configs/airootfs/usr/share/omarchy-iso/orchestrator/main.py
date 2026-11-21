@@ -113,7 +113,9 @@ def main() -> int:
         stop_target_keyring_init(ctx)
         cleanup_bind_mounts(ctx)
         cleanup_target_hook_masks(ctx)
-        if not success:
+        if reinstall := ctx.state.get("home_reinstall"):
+            reinstall.cleanup()
+        elif not success:
             cleanup_protected_state(ctx)
 
 

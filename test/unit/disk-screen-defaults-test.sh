@@ -92,12 +92,18 @@ check "free space on offer: full disk still first" \
 check "no free-space mode on offer (BIOS, or no room)" \
   "full_disk|other_disk" \
   "$(install_mode_choices false | paste -sd'|' -)"
+check "reinstall is offered even with no free space" \
+  "full_disk|preserve_home|other_disk" \
+  "$(install_mode_choices false true | paste -sd'|' -)"
+check "free-space and reinstall can both be offered" \
+  "full_disk|free_space|preserve_home|other_disk" \
+  "$(install_mode_choices true true | paste -sd'|' -)"
 
 echo "==> the configurator calls them"
 check "disk list from install_disk_candidates" "1" \
   "$(grep -v '^\s*#' "$CONFIGURATOR" | grep -c 'install_disk_candidates "\$exclude_disk"')"
 check "mode list from install_mode_choices" "1" \
-  "$(grep -v '^\s*#' "$CONFIGURATOR" | grep -c 'install_mode_choices "\$free_space_offered"')"
+  "$(grep -v '^\s*#' "$CONFIGURATOR" | grep -c 'install_mode_choices "\$free_space_offered" "\$preserve_offered"')"
 check "Esc on the disk or mode list does not end the install" "0" \
   "$(grep -E 't (disk|mode)\.header' "$CONFIGURATOR" | grep -c '|| abort')"
 check "Esc on the mode list goes back to the disk list" "1" \

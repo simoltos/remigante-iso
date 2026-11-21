@@ -314,6 +314,15 @@ def _install_disk(ctx: InstallContext) -> str | None:
 
 def prepare_install_target(ctx: InstallContext) -> None:
     """Verify the layout and install media before releasing the target disk."""
+    if getattr(ctx, "mode", None) == "preserve_home":
+        from .preserve_home import Reinstall
+
+        verify_install_medium(ctx)
+        _prepare_archinstall_config(ctx)
+        reinstall = ctx.state["home_reinstall"] = Reinstall(ctx)
+        reinstall.prepare()
+        return
+
     if ctx.is_protected:
         verify_protected_mounts(ctx)
         # The protected layout exists already; check the real mounts.
@@ -619,8 +628,11 @@ def arch_install_system(ctx: InstallContext) -> None:
     mirror_handler = ctx.state["mirror_handler"]
     config = handler.config
     pre_mounted = arch.is_pre_mount(config)
+    reinstall = ctx.state.get("home_reinstall")
 
     if not pre_mounted:
+        if reinstall:
+            raise RuntimeError("Reinstalling with the existing home requires a pre-mounted target.")
         info("› partitioning + formatting + encrypting")
         with _time_step("STEP.perform_filesystem_operations"):
             # The btrfs archinstall makes here is overwritten by the root
@@ -707,6 +719,8 @@ def arch_install_system(ctx: InstallContext) -> None:
             if config.auth_config and config.auth_config.users:
                 with _time_step("STEP.create_users"):
                     installer.create_users(config.auth_config.users)
+                    if reinstall:
+                        reinstall.restore_account_ids()
 
             if config.app_config:
                 # The image carries the PipeWire packages; this adds the audio
@@ -1187,7 +1201,8 @@ def _place_root_image(ctx: InstallContext) -> None:
 
 
 def _install_root_image(ctx: InstallContext) -> None:
-    _place_root_image(ctx)
+    if not ctx.state.get("home_reinstall"):
+        _place_root_image(ctx)
     _finish_root_image(ctx)
 
 
@@ -2939,6 +2954,9 @@ def run_chroot_finalizer(ctx: InstallContext, *, private_mounts: bool = False) -
     if ctx.defer_provisioning:
         info("› deferred-provisioning install: user finalization deferred to first boot")
         return
+    if ctx.state.get("home_reinstall"):
+        info("› preserving the existing user's home and settings")
+        return
 
     _run_target_setup_command(
         ctx,
@@ -3752,6 +3770,12 @@ def create_factory_snapshot(ctx: InstallContext) -> None:
     _join_target_keyring_init(ctx)
     _mark_updates_applied(ctx)
 
+    if reinstall := ctx.state.get("home_reinstall"):
+        _snapshot_factory(reinstall.root, reinstall.factory)
+        info("› activating the new root with the existing home subvolume")
+        reinstall.activate()
+        return
+
     fstype = _findmnt_value(ctx.target, "FSTYPE")
     if fstype != "btrfs":
         info(f"› target root is {fstype or 'unknown'}, not btrfs; skipping factory snapshot")
@@ -3784,18 +3808,16 @@ def create_factory_snapshot(ctx: InstallContext) -> None:
                 check=True, capture_output=True,
             )
 
-        info("› snapshotting @ as @factory (read-only)")
-        subprocess.run(
-            ["btrfs", "subvolume", "snapshot", str(root_subvol), str(factory)],
-            check=True,
-        )
-        _scrub_factory_snapshot(factory)
-        subprocess.run(
-            ["btrfs", "property", "set", "-ts", str(factory), "ro", "true"],
-            check=True,
-        )
+        _snapshot_factory(root_subvol, factory)
     finally:
         subprocess.run(["umount", str(top)], check=False, capture_output=True)
+
+
+def _snapshot_factory(root_subvol: Path, factory: Path) -> None:
+    info("› creating the read-only factory snapshot")
+    subprocess.run(["btrfs", "subvolume", "snapshot", str(root_subvol), str(factory)], check=True)
+    _scrub_factory_snapshot(factory)
+    subprocess.run(["btrfs", "property", "set", "-ts", str(factory), "ro", "true"], check=True)
 
 
 # Provisioning credentials staged for THIS deployment's first boot must not

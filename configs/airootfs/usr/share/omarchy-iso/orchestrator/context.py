@@ -162,7 +162,7 @@ class InstallContext:
 
     @property
     def is_protected(self) -> bool:
-        return self.mode == "protected"
+        return self.mode in {"protected", "preserve_home"}
 
 
 def _strip_account_fields(arch_configuration: dict) -> None:

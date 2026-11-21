@@ -19,6 +19,8 @@
 # Extra arguments name mappers to close beyond what the mount table shows:
 # a failure between luksOpen and mount leaves a mapper open with nothing
 # mounted from it, which the table sweep cannot see.
+# --keep-mappers releases just the target tree while reinstall cleanup still
+# needs its decrypted filesystem to remove the staged subvolumes.
 #
 # Idempotent: a target with nothing mounted and no mapper left open exits 0.
 # Exits nonzero when the tree stayed mounted (umount -R failed) or a crypt
@@ -49,7 +51,12 @@ mapper_uuid() {
   return 2
 }
 
-target="${1:?usage: omarchy-release-install-target <mountpoint> [mapper ...]}"
+keep_mappers=false
+if [[ ${1:-} == --keep-mappers ]]; then
+  keep_mappers=true
+  shift
+fi
+target="${1:?usage: omarchy-release-install-target [--keep-mappers] <mountpoint> [mapper ...]}"
 shift
 mappers=("$@")
 
@@ -80,6 +87,8 @@ if mountpoint -q "$target"; then
     exit 1
   fi
 fi
+
+$keep_mappers && exit 0
 
 # A mapper can be mounted outside the target tree too: the orchestrator
 # stage-mounts the same filesystem under /run/omarchy-install during some

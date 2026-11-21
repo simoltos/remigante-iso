@@ -349,7 +349,8 @@ class ConfiguratorTest(unittest.TestCase):
     def test_free_space_install_config_enables_the_fallback(self):
         configurator = Path(__file__).resolve().parents[2] / "configs/airootfs/root/configurator"
         body = configurator.read_text()
-        protected = body[body.index('"mode": "protected"'):]
+        self.assertIn('write_pre_mounted_configuration protected "$storage"', body)
+        protected = body[body.index('write_pre_mounted_configuration() {'):]
         boot_block = protected[protected.index('"boot": {'):protected.index("},", protected.index('"boot": {'))]
         self.assertIn('"enable_fallback": true', boot_block)
 
